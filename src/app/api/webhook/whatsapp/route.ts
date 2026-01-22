@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabaseClient";
 import { generateAutoResponse } from "@/lib/autoResponder";
 import OpenAI from "openai";
+import speech from "@google-cloud/speech";
 
 // Type definition for WhatsApp webhook payload
 type WhatsAppWebhookPayload = {
@@ -32,13 +33,16 @@ const openai = process.env.OPENAI_API_KEY ? new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
 }) : null;
 
+// Initialize Google Speech client
+const speechClient = new speech.SpeechClient({
+    credentials: {
+        client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+        private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+    },
+});
+
 // Function to transcribe voice message to text
 async function transcribeVoiceMessage(mediaUrl: string): Promise<string | null> {
-    if (!openai) {
-        console.error("OpenAI client not initialized - missing OPENAI_API_KEY");
-        return null;
-    }
-
     try {
         console.log("Downloading audio from:", mediaUrl);
 
@@ -49,21 +53,45 @@ async function transcribeVoiceMessage(mediaUrl: string): Promise<string | null> 
         }
 
         const audioBuffer = await response.arrayBuffer();
-        const audioFile = new File([audioBuffer], "voice.ogg", { type: "audio/ogg" }); // Changed to ogg since the URL ends with .ogg
+        const audioBytes = Buffer.from(audioBuffer);
 
-        console.log("Audio file size:", audioBuffer.byteLength, "bytes");
-        console.log("Sending to Whisper API for transcription");
+        console.log("Audio file size:", audioBytes.length, "bytes");
+        console.log("Sending to Google Speech-to-Text API for transcription");
 
-        // Transcribe using OpenAI Whisper
-        const transcription = await openai.audio.transcriptions.create({
-            file: audioFile,
-            model: "whisper-1",
-            language: undefined, // Auto-detect language
-            response_format: "text",
-        });
+        // Configure the audio and transcription request
+        const audio = {
+            content: audioBytes,
+        };
+
+        const config = {
+            encoding: 'OGG_OPUS' as const, // Since the file is .ogg
+            sampleRateHertz: 16000, // Common for WhatsApp voice messages
+            languageCode: 'hi-IN', // Hindi-India as primary, with alternatives
+            alternativeLanguageCodes: ['en-US', 'en-IN', 'gu-IN'], // Support English and Gujarati too
+            enableAutomaticPunctuation: true,
+            enableWordTimeOffsets: false,
+        };
+
+        const request = {
+            audio: audio,
+            config: config,
+        };
+
+        // Transcribe using Google Speech-to-Text
+        const [response_google] = await speechClient.recognize(request);
+        const transcription = response_google.results
+            ?.map(result => result.alternatives?.[0]?.transcript)
+            .filter(Boolean)
+            .join(' ')
+            .trim();
+
+        if (!transcription) {
+            console.log("No transcription returned from Google Speech API");
+            return null;
+        }
 
         console.log("Transcription successful:", transcription.substring(0, 100) + "...");
-        return transcription.trim();
+        return transcription;
     } catch (error) {
         console.error("Voice transcription failed:", error);
         return null;
