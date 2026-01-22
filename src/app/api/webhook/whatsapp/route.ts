@@ -13,7 +13,10 @@ type WhatsAppWebhookPayload = {
     content: {
         contentType: string;
         text?: string;
-        mediaUrl?: string; // For voice/audio messages
+        media?: {
+            type: string;
+            url: string;
+        };
     };
     whatsapp?: {
         senderName?: string;
@@ -46,8 +49,9 @@ async function transcribeVoiceMessage(mediaUrl: string): Promise<string | null> 
         }
 
         const audioBuffer = await response.arrayBuffer();
-        const audioFile = new File([audioBuffer], "voice.mp3", { type: "audio/mp3" });
+        const audioFile = new File([audioBuffer], "voice.ogg", { type: "audio/ogg" }); // Changed to ogg since the URL ends with .ogg
 
+        console.log("Audio file size:", audioBuffer.byteLength, "bytes");
         console.log("Sending to Whisper API for transcription");
 
         // Transcribe using OpenAI Whisper
@@ -118,11 +122,20 @@ export async function POST(req: Request) {
 
         // Determine message text - handle both text and voice messages
         let messageText = payload.content?.text || payload.UserResponse;
-        const isVoiceMessage = payload.content?.contentType === "audio" || payload.content?.contentType === "voice";
+        const isVoiceMessage = payload.content?.contentType === "media" && payload.content?.media?.type === "voice";
 
-        if (isVoiceMessage && payload.content?.mediaUrl && !alreadyResponded) {
+        console.log("Message analysis:", {
+            contentType: payload.content?.contentType,
+            mediaType: payload.content?.media?.type,
+            hasMediaUrl: !!payload.content?.media?.url,
+            isVoiceMessage,
+            alreadyResponded,
+            event: payload.event
+        });
+
+        if (isVoiceMessage && payload.content?.media?.url && !alreadyResponded) {
             console.log("Voice message detected, transcribing...");
-            const transcription = await transcribeVoiceMessage(payload.content.mediaUrl);
+            const transcription = await transcribeVoiceMessage(payload.content.media.url);
             if (transcription) {
                 messageText = transcription;
                 console.log("Using transcribed text for auto-response");
