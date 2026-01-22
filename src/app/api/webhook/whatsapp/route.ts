@@ -122,7 +122,7 @@ export async function POST(req: Request) {
 
         // Determine message text - handle both text and voice messages
         let messageText = payload.content?.text || payload.UserResponse;
-        const isVoiceMessage = payload.content?.contentType === "media" && payload.content?.media?.type === "voice";
+        const isVoiceMessage = payload.content?.contentType === "media" && payload.content?.media?.type === "audio";
 
         console.log("Message analysis:", {
             contentType: payload.content?.contentType,
