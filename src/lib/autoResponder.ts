@@ -194,13 +194,16 @@ export async function generateAutoResponse(
             }
         }
 
+        // Force English only for professional responses
+        detectedLanguage = "english";
+
         console.log(`Detected language: ${detectedLanguage} for message: "${messageText.substring(0, 50)}..."`);
 
         // Detect selected service from conversation history
         if (conversationText.includes("the look") && !conversationText.includes("the system") && !conversationText.includes("the reach")) {
             selectedService = "the_look";
             currentStep = conversationText.includes("budget") ? "budget" : conversationText.includes("book") ? "booking" : "discovery";
-        } else if (conversationText.includes("the system") && !conversationText.includes("the look") && !conversationText.includes("the reach")) {
+        } else if ((conversationText.includes("the system") || conversationText.includes("seo") || conversationText.includes("search engine") || conversationText.includes("website") || conversationText.includes("audit")) && !conversationText.includes("the look") && !conversationText.includes("the reach")) {
             selectedService = "the_system";
             currentStep = conversationText.includes("budget") ? "budget" : conversationText.includes("audit") ? "audit" : "discovery";
         } else if (conversationText.includes("the reach") && !conversationText.includes("the look") && !conversationText.includes("the system")) {
@@ -213,7 +216,7 @@ export async function generateAutoResponse(
         if (currentMessageLower.includes("the look") && !currentMessageLower.includes("the system") && !currentMessageLower.includes("the reach")) {
             selectedService = "the_look";
             currentStep = "discovery";
-        } else if (currentMessageLower.includes("the system") && !currentMessageLower.includes("the look") && !currentMessageLower.includes("the reach")) {
+        } else if ((currentMessageLower.includes("the system") || currentMessageLower.includes("seo") || currentMessageLower.includes("search engine") || currentMessageLower.includes("website") || currentMessageLower.includes("audit")) && !currentMessageLower.includes("the look") && !currentMessageLower.includes("the reach")) {
             selectedService = "the_system";
             currentStep = "discovery";
         } else if (currentMessageLower.includes("the reach") && !currentMessageLower.includes("the look") && !currentMessageLower.includes("the system")) {
@@ -269,57 +272,44 @@ export async function generateAutoResponse(
 
         // 6. Generate response using Groq with conversational system prompt
         const documentRules =
-            `You are a strategic marketing agency consultant and sales qualifier.\n\n` +
-            `HUMAN REALISM:\n` +
-            `- NEVER say you are AI, a bot, or automated\n` +
-            `- Sound like a real human brand consultant\n` +
-            `- Be natural, confident, warm, and business-smart\n` +
-            `- Use conversational language, not robotic or scripted\n` +
-            `- Match the user's language: English, Hindi, Hinglish, Gujarati\n` +
-            `- Continue in the same language if user switches\n\n` +
-            `AGENCY SERVICES (3 PILLARS):\n` +
-            `1. The Look — Branding, Visual Identity, Content, Creative Direction\n` +
-            `2. The System — Websites, Funnels, Automation, CRM, Digital Infrastructure\n` +
-            `3. The Reach — Advertising, Performance Marketing, PR, Growth Campaigns\n\n` +
-            `CONSULTANT BEHAVIOR:\n` +
-            `- Understand business stage (idea, startup, growing, scaling)\n` +
-            `- Ask smart questions about goals, challenges, budget\n` +
-            `- Educate before selling - explain concepts naturally\n` +
-            `- Recommend services with authority and clarity\n` +
-            `- Avoid technical overload unless specifically asked\n` +
-            `- If unsure about information, say you don't have enough data\n\n` +
-            `SALES APPROACH:\n` +
-            `- Do NOT hard-sell aggressively\n` +
-            `- Guide naturally toward booking a 15-minute System Audit\n` +
-            `- Position audit as helpful opportunity, not sales trap\n` +
-            `- Build trust first, close second\n` +
-            `- Focus on user's needs and challenges\n\n` +
+            `You are a friendly WhatsApp assistant chatting naturally with customers.\n\n` +
+            `RESPONSE STYLE:\n` +
+            `- Sound like a real human executive on WhatsApp\n` +
+            `- Use casual, conversational language\n` +
+            `- Mix Hindi and English (Hinglish) when it feels natural\n` +
+            `- Keep replies SHORT (2-3 lines max)\n` +
+            `- Use emojis occasionally 😊 (not too much)\n` +
+            `- Ask ONE small follow-up question if helpful\n` +
+            `- Never say "As an AI..." or "I am here to help you with..."\n` +
+            `- Always acknowledge greetings properly (hi/hello/hey)\n` +
+            `- Reference what the user just said naturally\n\n` +
             `LANGUAGE REQUIREMENTS:\n` +
             `- DETECTED USER LANGUAGE: ${detectedLanguage.toUpperCase()}\n` +
             `- You MUST reply in the SAME LANGUAGE as the user\n` +
             `- Maintain consistent language throughout conversation\n` +
             `- Use appropriate script and vocabulary for the detected language\n` +
             `- Do NOT switch languages unless user explicitly requests it\n\n` +
-            `CONVERSATION FLOW:\n` +
-            `- Remember previous messages in the conversation\n` +
-            `- Build upon what was discussed before\n` +
-            `- Don't repeat information already provided\n` +
-            `- Guide the conversation logically to next steps\n` +
-            `- Stay focused on the current topic/service\n` +
-            `- If user changes topic, acknowledge and transition smoothly\n\n` +
+            `CONVERSATION CONTEXT RULES:\n` +
+            `- SELECTED SERVICE: ${selectedService || 'none'}\n` +
+            `- CURRENT STEP: ${currentStep}\n` +
+            `- Stay strictly within the selected service context\n` +
+            `- Do NOT introduce other services unless user explicitly asks\n` +
+            `- If user says "yes" to a question about current service, continue with that service\n` +
+            `- Only cross-sell after current service flow is complete\n` +
+            `- Maintain service focus throughout conversation\n\n` +
             `CONTENT GUIDANCE:\n` +
             `- Use the provided context to answer questions naturally\n` +
-            `- If information is missing, ask for clarification politely\n` +
+            `- If you don't have the info in context, politely ask for clarification\n` +
             `- Don't dump raw text - weave information into conversation\n` +
-            `- Be helpful and build trust like a real consultant`;
+            `- Be helpful and friendly, like chatting with a customer`;
 
         let systemPrompt: string;
         if (customSystemPrompt) {
-            // Combine custom prompt with marketing consultant guidance
-            systemPrompt = `${customSystemPrompt}\n\nIMPORTANT: Act as a human marketing consultant. Respond in ${detectedLanguage.toUpperCase()} only. Guide toward 15-minute System Audit naturally.\n\n${documentRules}`;
+            // Combine custom prompt with language and conversation guidance
+            systemPrompt = `${customSystemPrompt}\n\nLANGUAGE: Reply in ${detectedLanguage.toUpperCase()} only.\n\n${documentRules}`;
         } else {
-            // Use default marketing consultant prompt
-            systemPrompt = `You are a strategic marketing agency consultant helping businesses grow.\n\nRespond in ${detectedLanguage.toUpperCase()} only. Focus on understanding their business needs and guiding them toward a 15-minute System Audit.\n\n${documentRules}`;
+            // Use default friendly WhatsApp assistant prompt
+            systemPrompt = `You are a friendly WhatsApp assistant helping customers with questions and requests.\n\nLANGUAGE: Reply in ${detectedLanguage.toUpperCase()} only.\n\n${documentRules}`;
         }
 
         // Check if this is a greeting
@@ -334,56 +324,29 @@ export async function generateAutoResponse(
         // Special handling for service-specific conversations
         if (selectedService === "the_look" && !isGreeting) {
             // For The Look service, stay focused on visual identity topics
-            let lookSpecificPrompt = `${systemPrompt}\n\nSERVICE FOCUS - THE LOOK (Branding & Visual Identity):\n` +
-                `- Discuss: logo design, brand identity, visual storytelling, content creation, creative direction\n` +
-                `- Understand their brand personality and target audience\n` +
-                `- Ask about their vision and current brand challenges\n` +
-                `- Guide toward understanding how visual identity impacts business growth\n` +
-                `- Naturally suggest a 15-minute System Audit to assess their current brand foundation\n` +
-                `- Stay focused on visual identity until they express interest in other areas`;
+            let lookSpecificPrompt = `${systemPrompt}\n\nSERVICE FOCUS - THE LOOK (Visual Identity):\n` +
+                `- ONLY discuss: logo, branding, color themes, visuals, content creation\n` +
+                `- Next logical questions: logo style, brand personality, usage context\n` +
+                `- DO NOT mention: SEO, WhatsApp API, web development, social media marketing\n` +
+                `- If user says "yes" to strategy question, ask about logo/brand details\n` +
+                `- Stay in visual identity context until user explicitly changes service`;
 
-            // If user is confirming something, guide them toward audit
-            if (isConfirmation && (conversationText.includes("strategy") || conversationText.includes("brand"))) {
-                lookSpecificPrompt += `\n\nUSER SHOWING INTEREST - NEXT STEPS:\n` +
-                    `- Acknowledge their interest in branding/visual identity\n` +
-                    `- Suggest the 15-minute System Audit as a helpful first step\n` +
-                    `- Position it as understanding their current brand health before recommending solutions`;
+            // If user is confirming something, guide them to next logical step in The Look
+            if (isConfirmation && conversationText.includes("strategy")) {
+                lookSpecificPrompt += `\n\nUSER CONFIRMED STRATEGY INTEREST - NEXT STEPS:\n` +
+                    `- Ask about logo preferences, brand personality, or visual style\n` +
+                    `- Do not jump to other services or marketing topics\n` +
+                    `- Focus on visual identity deliverables`;
             }
 
             systemPrompt = lookSpecificPrompt;
             console.log("Applied The Look service focus");
-        } else if (selectedService === "the_system" && !isGreeting) {
-            // For The System service, focus on digital infrastructure
-            let systemSpecificPrompt = `${systemPrompt}\n\nSERVICE FOCUS - THE SYSTEM (Digital Infrastructure):\n` +
-                `- Discuss: websites, funnels, automation, CRM, digital systems\n` +
-                `- Understand their current tech stack and pain points\n` +
-                `- Ask about their customer journey and conversion challenges\n` +
-                `- Guide toward understanding how systems impact scalability\n` +
-                `- This is our core audit area - emphasize the 15-minute System Audit\n` +
-                `- Position audit as essential for identifying growth bottlenecks`;
-
-            systemPrompt = systemSpecificPrompt;
-            console.log("Applied The System service focus");
-        } else if (selectedService === "the_reach" && !isGreeting) {
-            // For The Reach service, focus on growth and marketing
-            let reachSpecificPrompt = `${systemPrompt}\n\nSERVICE FOCUS - THE REACH (Growth & Marketing):\n` +
-                `- Discuss: advertising, performance marketing, PR, growth campaigns\n` +
-                `- Understand their target market and current marketing efforts\n` +
-                `- Ask about their growth goals and current ROI\n` +
-                `- Guide toward understanding how marketing scales business\n` +
-                `- Suggest System Audit first to ensure foundation is solid before marketing spend\n` +
-                `- Position audit as identifying the best marketing opportunities`;
-
-            systemPrompt = reachSpecificPrompt;
-            console.log("Applied The Reach service focus");
         } else if (isAskingServices && !selectedService) {
             // User is asking about services, provide marketing agency overview
             systemPrompt += `\n\nUSER ASKING ABOUT SERVICES:\n` +
-                `- Introduce yourself as a marketing consultant\n` +
-                `- Explain our three pillars: The Look (branding), The System (infrastructure), The Reach (growth)\n` +
-                `- Ask about their business stage and main challenges\n` +
-                `- Guide conversation toward understanding their needs\n` +
-                `- Suggest 15-minute System Audit as a helpful starting point`;
+                `- Provide overview of all three services: The Look, The System, The Reach\n` +
+                `- Ask which service interests them\n` +
+                `- Do not dive deep into any one service yet`;
             console.log("Applied services overview context");
         }
 
@@ -394,7 +357,7 @@ export async function generateAutoResponse(
                 messages: [
                     {
                         role: "system",
-                        content: `${systemPrompt}\n\nThe user greeted you. Respond warmly in ${detectedLanguage.toUpperCase()} as a marketing consultant. Ask how you can help them grow their business today. Keep it natural and welcoming.`
+                        content: `${systemPrompt}\n\nThe user just greeted you in ${detectedLanguage.toUpperCase()}. Respond warmly in the SAME LANGUAGE and ask how you can help them today. Keep it short and friendly.`
                     },
                     { role: "user", content: messageText }
                 ],
@@ -452,8 +415,8 @@ export async function generateAutoResponse(
         const completion = await groq.chat.completions.create({
             model: "llama-3.3-70b-versatile",
             messages,
-            temperature: 0.7, // Balanced temperature for natural, confident responses
-            max_tokens: 200, // Allow for conversational length while keeping it concise
+            temperature: 0.8, // Higher temperature for more natural, varied responses
+            max_tokens: 300, // Allow slightly longer responses for natural conversation
         });
 
         const response = completion.choices[0].message.content;
