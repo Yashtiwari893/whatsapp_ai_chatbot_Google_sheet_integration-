@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabaseClient";
 import { generateAutoResponse } from "@/lib/autoResponder";
+import OpenAI from "openai";
 
 // Type definition for WhatsApp webhook payload
 type WhatsAppWebhookPayload = {
@@ -12,6 +13,7 @@ type WhatsAppWebhookPayload = {
     content: {
         contentType: string;
         text?: string;
+        mediaUrl?: string; // For voice/audio messages
     };
     whatsapp?: {
         senderName?: string;
@@ -22,6 +24,47 @@ type WhatsAppWebhookPayload = {
     isResponded?: boolean;
     UserResponse?: string;
 };
+
+const openai = process.env.OPENAI_API_KEY ? new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+}) : null;
+
+// Function to transcribe voice message to text
+async function transcribeVoiceMessage(mediaUrl: string): Promise<string | null> {
+    if (!openai) {
+        console.error("OpenAI client not initialized - missing OPENAI_API_KEY");
+        return null;
+    }
+
+    try {
+        console.log("Downloading audio from:", mediaUrl);
+
+        // Download the audio file
+        const response = await fetch(mediaUrl);
+        if (!response.ok) {
+            throw new Error(`Failed to download audio: ${response.status}`);
+        }
+
+        const audioBuffer = await response.arrayBuffer();
+        const audioFile = new File([audioBuffer], "voice.mp3", { type: "audio/mp3" });
+
+        console.log("Sending to Whisper API for transcription");
+
+        // Transcribe using OpenAI Whisper
+        const transcription = await openai.audio.transcriptions.create({
+            file: audioFile,
+            model: "whisper-1",
+            language: undefined, // Auto-detect language
+            response_format: "text",
+        });
+
+        console.log("Transcription successful:", transcription.substring(0, 100) + "...");
+        return transcription.trim();
+    } catch (error) {
+        console.error("Voice transcription failed:", error);
+        return null;
+    }
+}
 
 export async function POST(req: Request) {
     try {
@@ -48,7 +91,7 @@ export async function POST(req: Request) {
                     to_number: payload.to,
                     received_at: payload.receivedAt,
                     content_type: payload.content?.contentType,
-                    content_text: payload.content?.text || payload.UserResponse,
+                    content_text: payload.content?.text || payload.UserResponse, // Initial text, will update if voice
                     sender_name: payload.whatsapp?.senderName,
                     event_type: payload.event,
                     is_in_24_window: payload.isin24window || false,
@@ -73,8 +116,29 @@ export async function POST(req: Request) {
         const existingMessage = data?.[0];
         const alreadyResponded = existingMessage?.auto_respond_sent;
 
+        // Determine message text - handle both text and voice messages
+        let messageText = payload.content?.text || payload.UserResponse;
+        const isVoiceMessage = payload.content?.contentType === "audio" || payload.content?.contentType === "voice";
+
+        if (isVoiceMessage && payload.content?.mediaUrl && !alreadyResponded) {
+            console.log("Voice message detected, transcribing...");
+            const transcription = await transcribeVoiceMessage(payload.content.mediaUrl);
+            if (transcription) {
+                messageText = transcription;
+                console.log("Using transcribed text for auto-response");
+
+                // Update the database with transcribed text
+                await supabase
+                    .from("whatsapp_messages")
+                    .update({ content_text: messageText })
+                    .eq("message_id", payload.messageId);
+            } else {
+                console.log("Transcription failed, skipping auto-response for voice message");
+                messageText = undefined; // Skip processing if transcription fails
+            }
+        }
+
         // Trigger auto-response if it's a user message and hasn't been responded to yet
-        const messageText = payload.content?.text || payload.UserResponse;
         if (messageText && payload.event === "MoMessage" && !alreadyResponded) {
             console.log("Processing auto-response for message:", payload.messageId);
 
