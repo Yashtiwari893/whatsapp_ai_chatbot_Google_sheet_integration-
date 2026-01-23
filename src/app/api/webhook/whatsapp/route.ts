@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabaseClient";
 import { generateAutoResponse } from "@/lib/autoResponder";
 import OpenAI from "openai";
-import speech from "@google-cloud/speech";
 
 // Type definition for WhatsApp webhook payload
 type WhatsAppWebhookPayload = {
@@ -33,16 +32,10 @@ const openai = process.env.OPENAI_API_KEY ? new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
 }) : null;
 
-// Initialize Google Speech client
-const speechClient = new speech.SpeechClient({
-    credentials: {
-        client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-        private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-    },
-});
+// Function to transcribe voice message to text using OpenAI Whisper
+async function transcribeVoiceMessage(mediaUrl: string, retryCount = 0): Promise<string | null> {
+    const maxRetries = 2;
 
-// Function to transcribe voice message to text
-async function transcribeVoiceMessage(mediaUrl: string): Promise<string | null> {
     try {
         console.log("Downloading audio from:", mediaUrl);
 
@@ -53,47 +46,44 @@ async function transcribeVoiceMessage(mediaUrl: string): Promise<string | null> 
         }
 
         const audioBuffer = await response.arrayBuffer();
-        const audioBytes = Buffer.from(audioBuffer);
+        const audioFile = new File([audioBuffer], "audio.ogg", { type: "audio/ogg" });
 
-        console.log("Audio file size:", audioBytes.length, "bytes");
-        console.log("Sending to Google Speech-to-Text API for transcription");
+        console.log("Audio file size:", audioFile.size, "bytes");
+        console.log("Sending to OpenAI Whisper API for transcription");
 
-        // Configure the audio and transcription request
-        const audio = {
-            content: audioBytes,
-        };
+        if (!openai) {
+            throw new Error("OpenAI client not initialized - missing API key");
+        }
 
-        const config = {
-            encoding: 'OGG_OPUS' as const, // Since the file is .ogg
-            sampleRateHertz: 16000, // Common for WhatsApp voice messages
-            languageCode: 'hi-IN', // Hindi-India as primary, with alternatives
-            alternativeLanguageCodes: ['en-US', 'en-IN', 'gu-IN'], // Support English and Gujarati too
-            enableAutomaticPunctuation: true,
-            enableWordTimeOffsets: false,
-        };
+        // Transcribe using OpenAI Whisper API
+        const transcription = await openai.audio.transcriptions.create({
+            file: audioFile,
+            model: "whisper-1",
+            language: "hi", // Primary language: Hindi
+            response_format: "text",
+            temperature: 0, // More deterministic results
+        });
 
-        const request = {
-            audio: audio,
-            config: config,
-        };
-
-        // Transcribe using Google Speech-to-Text
-        const [response_google] = await speechClient.recognize(request);
-        const transcription = response_google.results
-            ?.map(result => result.alternatives?.[0]?.transcript)
-            .filter(Boolean)
-            .join(' ')
-            .trim();
-
-        if (!transcription) {
-            console.log("No transcription returned from Google Speech API");
+        if (!transcription || typeof transcription !== 'string' || transcription.trim().length === 0) {
+            console.log("No transcription returned from OpenAI Whisper API");
             return null;
         }
 
-        console.log("Transcription successful:", transcription.substring(0, 100) + "...");
-        return transcription;
+        const cleanedTranscription = transcription.trim();
+        console.log("Transcription successful:", cleanedTranscription.substring(0, 100) + "...");
+        return cleanedTranscription;
+
     } catch (error) {
-        console.error("Voice transcription failed:", error);
+        console.error(`Voice transcription failed (attempt ${retryCount + 1}/${maxRetries + 1}):`, error);
+
+        // Retry logic for transient failures
+        if (retryCount < maxRetries) {
+            console.log(`Retrying transcription in 2 seconds...`);
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            return transcribeVoiceMessage(mediaUrl, retryCount + 1);
+        }
+
+        console.error("All transcription attempts failed");
         return null;
     }
 }
