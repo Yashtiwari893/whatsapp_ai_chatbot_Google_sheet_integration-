@@ -6,7 +6,7 @@ const client = new Mistral({
   apiKey: process.env.MISTRAL_API_KEY,
 });
 
-interface TranscriptionResult {
+export interface TranscriptionResult {
   rawTranscript: string;
   cleanedTranscript: string;
   language?: string;
@@ -60,7 +60,7 @@ function normalizeTranscript(text: string): string {
 /**
  * Processes audio file with Mistral STT API
  */
-async function transcribeAudio(audioBuffer: ArrayBuffer, filename: string): Promise<TranscriptionResult> {
+export async function transcribeAudio(audioBuffer: ArrayBuffer, filename: string): Promise<TranscriptionResult> {
   try {
     // Create a Blob from the ArrayBuffer
     const audioBlob = new Blob([audioBuffer], { type: 'audio/webm' });

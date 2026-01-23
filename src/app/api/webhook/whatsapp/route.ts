@@ -4,6 +4,9 @@ import { generateAutoResponse } from "@/lib/autoResponder";
 import OpenAI from "openai";
 // import speech from "@google-cloud/speech";
 
+// Import our Mistral STT function
+import { transcribeAudio, TranscriptionResult } from "../../stt/mistral/route";
+
 // Type definition for WhatsApp webhook payload
 type WhatsAppWebhookPayload = {
     messageId: string;
@@ -41,8 +44,8 @@ const openai = process.env.OPENAI_API_KEY ? new OpenAI({
 //     },
 // });
 
-// Function to transcribe voice message to text
-async function transcribeVoiceMessage(mediaUrl: string): Promise<string | null> {
+// Function to transcribe voice message to text using Mistral STT
+async function transcribeVoiceMessage(mediaUrl: string): Promise<{ text: string; result: TranscriptionResult } | null> {
     try {
         console.log("Downloading audio from:", mediaUrl);
 
@@ -53,48 +56,24 @@ async function transcribeVoiceMessage(mediaUrl: string): Promise<string | null> 
         }
 
         const audioBuffer = await response.arrayBuffer();
-        const audioBytes = Buffer.from(audioBuffer);
+        console.log("Audio file size:", audioBuffer.byteLength, "bytes");
 
-        console.log("Audio file size:", audioBytes.length, "bytes");
-        console.log("Sending to Google Speech-to-Text API for transcription");
+        console.log("Sending to Mistral Speech-to-Text API for transcription");
 
-        // Configure the audio and transcription request
-        const audio = {
-            content: audioBytes,
-        };
+        // Use the imported transcribeAudio function
+        const result = await transcribeAudio(audioBuffer, 'voice-message.ogg');
 
-        const config = {
-            encoding: 'OGG_OPUS' as const, // Since the file is .ogg
-            sampleRateHertz: 16000, // Common for WhatsApp voice messages
-            languageCode: 'hi-IN', // Hindi-India as primary, with alternatives
-            alternativeLanguageCodes: ['en-US', 'en-IN', 'gu-IN'], // Support English and Gujarati too
-            enableAutomaticPunctuation: true,
-            enableWordTimeOffsets: false,
-        };
-
-        const request = {
-            audio: audio,
-            config: config,
-        };
-
-        // Transcribe using Google Speech-to-Text
-        // const [response_google] = await speechClient.recognize(request);
-        // const transcription = response_google.results
-        //     ?.map(result => result.alternatives?.[0]?.transcript)
-        //     .filter(Boolean)
-        //     .join(' ')
-        //     .trim();
-
-        // Temporarily disabled
-        const transcription = null;
+        const transcription = result.cleanedTranscript || result.rawTranscript;
 
         if (!transcription) {
-            console.log("Transcription temporarily disabled");
+            console.log("No transcription returned from Mistral STT API");
             return null;
         }
 
-        // console.log("Transcription successful:", transcription.substring(0, 100) + "...");
-        return transcription;
+        console.log("Transcription successful:", transcription.substring(0, 100) + (transcription.length > 100 ? "..." : ""));
+        console.log("Detected language:", result.language || 'unknown');
+
+        return { text: transcription, result };
     } catch (error) {
         console.error("Voice transcription failed:", error);
         return null;
@@ -166,15 +145,20 @@ export async function POST(req: Request) {
 
         if (isVoiceMessage && payload.content?.media?.url && !alreadyResponded) {
             console.log("Voice message detected, transcribing...");
-            const transcription = await transcribeVoiceMessage(payload.content.media.url);
-            if (transcription) {
-                messageText = transcription;
+            const transcriptionResult = await transcribeVoiceMessage(payload.content.media.url);
+            if (transcriptionResult) {
+                messageText = transcriptionResult.text;
                 console.log("Using transcribed text for auto-response");
 
-                // Update the database with transcribed text
+                // Update the database with transcribed text and transcription details
                 await supabase
                     .from("whatsapp_messages")
-                    .update({ content_text: messageText })
+                    .update({
+                        content_text: messageText,
+                        raw_transcript: transcriptionResult.result.rawTranscript,
+                        transcript_language: transcriptionResult.result.language,
+                        transcript_method: 'mistral-stt'
+                    })
                     .eq("message_id", payload.messageId);
             } else {
                 console.log("Transcription failed, skipping auto-response for voice message");
