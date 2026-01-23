@@ -2,19 +2,7 @@ import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabaseClient";
 import { generateAutoResponse } from "@/lib/autoResponder";
 import OpenAI from "openai";
-import Groq from "groq-sdk";
-import { exec } from "child_process";
-import { promises as fs } from "fs";
-import path from "path";
-import os from "os";
-import ffmpeg from "fluent-ffmpeg";
-import ffmpegStatic from "ffmpeg-static";
-import { transcribeAudioWithMistral } from "@/lib/mistralStt";
-
-// Set FFmpeg path to use bundled binary
-if (ffmpegStatic) {
-    ffmpeg.setFfmpegPath(ffmpegStatic);
-}
+// import speech from "@google-cloud/speech";
 
 // Type definition for WhatsApp webhook payload
 type WhatsAppWebhookPayload = {
@@ -45,16 +33,18 @@ const openai = process.env.OPENAI_API_KEY ? new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
 }) : null;
 
-const groq = process.env.GROQ_API_KEY ? new Groq({
-    apiKey: process.env.GROQ_API_KEY,
-}) : null;
+// Initialize Google Speech client
+// const speechClient = new speech.SpeechClient({
+//     credentials: {
+//         client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+//         private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+//     },
+// });
 
-// Function to transcribe voice message using Local Whisper (primary) with API fallbacks
-export async function transcribeVoiceMessage(mediaUrl: string, retryCount = 0): Promise<string | null> {
-    const maxRetries = 2;
-
+// Function to transcribe voice message to text
+async function transcribeVoiceMessage(mediaUrl: string): Promise<string | null> {
     try {
-        console.log("Starting voice transcription process for:", mediaUrl);
+        console.log("Downloading audio from:", mediaUrl);
 
         // Download the audio file
         const response = await fetch(mediaUrl);
@@ -63,187 +53,50 @@ export async function transcribeVoiceMessage(mediaUrl: string, retryCount = 0): 
         }
 
         const audioBuffer = await response.arrayBuffer();
-        console.log("Audio downloaded, size:", audioBuffer.byteLength, "bytes");
+        const audioBytes = Buffer.from(audioBuffer);
 
-        // Try Local Whisper first (FREE)
-        console.log("Attempting Local Whisper transcription...");
-        const localTranscription = await transcribeWithLocalWhisper(audioBuffer);
-        if (localTranscription) {
-            console.log("✅ Local Whisper transcription successful");
-            return localTranscription;
-        }
+        console.log("Audio file size:", audioBytes.length, "bytes");
+        console.log("Sending to Google Speech-to-Text API for transcription");
 
-        console.log("❌ Local Whisper failed, trying OpenAI Whisper fallback...");
+        // Configure the audio and transcription request
+        const audio = {
+            content: audioBytes,
+        };
 
-        // Fallback 1: OpenAI Whisper
-        if (openai) {
-            const openaiTranscription = await transcribeWithOpenAI(audioBuffer);
-            if (openaiTranscription) {
-                console.log("✅ OpenAI Whisper fallback successful");
-                return openaiTranscription;
-            }
-        }
+        const config = {
+            encoding: 'OGG_OPUS' as const, // Since the file is .ogg
+            sampleRateHertz: 16000, // Common for WhatsApp voice messages
+            languageCode: 'hi-IN', // Hindi-India as primary, with alternatives
+            alternativeLanguageCodes: ['en-US', 'en-IN', 'gu-IN'], // Support English and Gujarati too
+            enableAutomaticPunctuation: true,
+            enableWordTimeOffsets: false,
+        };
 
-        console.log("❌ OpenAI Whisper failed, trying Groq fallback...");
+        const request = {
+            audio: audio,
+            config: config,
+        };
 
-        // Fallback 2: Groq (if available)
-        if (groq) {
-            const groqTranscription = await transcribeWithGroq(audioBuffer);
-            if (groqTranscription) {
-                console.log("✅ Groq fallback successful");
-                return groqTranscription;
-            }
-        }
+        // Transcribe using Google Speech-to-Text
+        // const [response_google] = await speechClient.recognize(request);
+        // const transcription = response_google.results
+        //     ?.map(result => result.alternatives?.[0]?.transcript)
+        //     .filter(Boolean)
+        //     .join(' ')
+        //     .trim();
 
-        console.log("❌ All transcription methods failed");
-        return null;
+        // Temporarily disabled
+        const transcription = null;
 
-    } catch (error) {
-        console.error(`Voice transcription failed (attempt ${retryCount + 1}/${maxRetries + 1}):`, error);
-
-        // Retry logic for transient failures
-        if (retryCount < maxRetries) {
-            console.log(`Retrying transcription in 3 seconds...`);
-            await new Promise(resolve => setTimeout(resolve, 3000));
-            return transcribeVoiceMessage(mediaUrl, retryCount + 1);
-        }
-
-        console.error("All transcription attempts failed");
-        return null;
-    }
-}
-
-// Local Whisper transcription using Python CLI
-async function transcribeWithLocalWhisper(audioBuffer: ArrayBuffer): Promise<string | null> {
-    let tempDir = "";
-    let oggPath = "";
-    let wavPath = "";
-
-    try {
-        // Check if whisper command is available
-        const whisperAvailable = await checkWhisperAvailability();
-        if (!whisperAvailable) {
-            console.log("Whisper CLI not available in this environment, skipping local transcription");
+        if (!transcription) {
+            console.log("Transcription temporarily disabled");
             return null;
         }
 
-        // Create temp directory
-        tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "whisper-"));
-        oggPath = path.join(tempDir, "audio.ogg");
-        wavPath = path.join(tempDir, "audio.wav");
-
-        // Write OGG file
-        await fs.writeFile(oggPath, Buffer.from(audioBuffer));
-
-        // Convert OGG to WAV using FFmpeg
-        await new Promise<void>((resolve, reject) => {
-            ffmpeg(oggPath)
-                .toFormat('wav')
-                .audioCodec('pcm_s16le')
-                .audioChannels(1)
-                .audioFrequency(16000)
-                .on('end', () => resolve())
-                .on('error', (err) => {
-                    console.error("FFmpeg conversion failed:", err);
-                    reject(err);
-                })
-                .save(wavPath);
-        });
-
-        // Call Whisper CLI
-        const transcription = await new Promise<string>((resolve, reject) => {
-            const command = `whisper "${wavPath}" --model base --language hi --output_format txt --output_dir "${tempDir}" --fp16 False`;
-            console.log("Running Whisper CLI:", command);
-
-            exec(command, { timeout: 60000 }, (error, _stdout, _stderr) => {
-                if (error) {
-                    console.error("Whisper CLI error:", error);
-                    reject(error);
-                    return;
-                }
-
-                // Read the generated text file
-                const txtPath = path.join(tempDir, "audio.txt");
-                fs.readFile(txtPath, 'utf8')
-                    .then(content => resolve(content.trim()))
-                    .catch(reject);
-            });
-        });
-
-        if (transcription && transcription.length > 0) {
-            return transcription;
-        }
-
-        return null;
-
+        // console.log("Transcription successful:", transcription.substring(0, 100) + "...");
+        return transcription;
     } catch (error) {
-        console.error("Local Whisper transcription failed:", error);
-        return null;
-    } finally {
-        // Cleanup temp files
-        try {
-            if (tempDir) {
-                await fs.rm(tempDir, { recursive: true, force: true });
-            }
-        } catch (cleanupError) {
-            console.warn("Failed to cleanup temp files:", cleanupError);
-        }
-    }
-}
-
-// Check if Whisper CLI is available
-async function checkWhisperAvailability(): Promise<boolean> {
-    return new Promise((resolve) => {
-        exec('whisper --help', { timeout: 5000 }, (error) => {
-            if (error) {
-                console.log("Whisper CLI not available:", error.message);
-                resolve(false);
-            } else {
-                console.log("Whisper CLI is available");
-                resolve(true);
-            }
-        });
-    });
-}
-
-// OpenAI Whisper fallback
-async function transcribeWithOpenAI(audioBuffer: ArrayBuffer): Promise<string | null> {
-    try {
-        if (!openai) return null;
-
-        const audioFile = new File([audioBuffer], "audio.ogg", { type: "audio/ogg" });
-
-        const transcription = await openai.audio.transcriptions.create({
-            file: audioFile,
-            model: "whisper-1",
-            language: "hi",
-            response_format: "text",
-            temperature: 0,
-        });
-
-        return transcription && typeof transcription === 'string' && transcription.trim().length > 0
-            ? transcription.trim()
-            : null;
-
-    } catch (error) {
-        console.error("OpenAI Whisper fallback failed:", error);
-        return null;
-    }
-}
-
-// Groq fallback (using their API if they support transcription)
-async function transcribeWithGroq(_audioBuffer: ArrayBuffer): Promise<string | null> {
-    try {
-        if (!groq) return null;
-
-        // Note: Groq primarily supports text generation, not audio transcription
-        // This is a placeholder - in practice, you might need to check if Groq has STT capabilities
-        // For now, we'll skip Groq as it doesn't have Whisper-like transcription
-        console.log("Groq does not support audio transcription, skipping...");
-        return null;
-
-    } catch (error) {
-        console.error("Groq fallback failed:", error);
+        console.error("Voice transcription failed:", error);
         return null;
     }
 }
@@ -312,31 +165,19 @@ export async function POST(req: Request) {
         });
 
         if (isVoiceMessage && payload.content?.media?.url && !alreadyResponded) {
-            console.log("Voice message detected, transcribing with Mistral-enhanced STT...");
-            const transcriptionResult = await transcribeAudioWithMistral(payload.content.media.url, {
-                enableCleanup: true,
-                language: 'auto',
-                maxRetries: 2
-            });
+            console.log("Voice message detected, transcribing...");
+            const transcription = await transcribeVoiceMessage(payload.content.media.url);
+            if (transcription) {
+                messageText = transcription;
+                console.log("Using transcribed text for auto-response");
 
-            if (transcriptionResult) {
-                messageText = transcriptionResult.cleanedTranscript;
-                console.log(`✅ Using Mistral-enhanced transcript: "${messageText.substring(0, 100)}..."`);
-                console.log(`📊 Language: ${transcriptionResult.language}, Confidence: ${(transcriptionResult.confidence * 100).toFixed(1)}%`);
-
-                // Update the database with both raw and cleaned transcript
+                // Update the database with transcribed text
                 await supabase
                     .from("whatsapp_messages")
-                    .update({
-                        content_text: messageText,
-                        raw_transcript: transcriptionResult.rawTranscript,
-                        transcript_language: transcriptionResult.language,
-                        transcript_confidence: transcriptionResult.confidence,
-                        transcript_method: transcriptionResult.method
-                    })
+                    .update({ content_text: messageText })
                     .eq("message_id", payload.messageId);
             } else {
-                console.log("❌ Transcription failed, skipping auto-response for voice message");
+                console.log("Transcription failed, skipping auto-response for voice message");
                 messageText = undefined; // Skip processing if transcription fails
             }
         }

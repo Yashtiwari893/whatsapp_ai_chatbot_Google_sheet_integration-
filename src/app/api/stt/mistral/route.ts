@@ -1,131 +1,168 @@
-/**
- * Mistral-Enhanced Speech-to-Text API Route
- *
- * POST /api/stt/mistral
- *
- * Accepts audio files and returns enhanced transcripts using Mistral AI
- *
- * Request: multipart/form-data with 'audio' file
- * Response: JSON with transcription results
- */
+import { NextRequest, NextResponse } from 'next/server';
+import { Mistral } from '@mistralai/mistralai';
 
-import { NextRequest, NextResponse } from "next/server";
-import { transcribeAudioWithMistral, validateAudioFile } from "@/lib/mistralStt";
+// Initialize Mistral client
+const client = new Mistral({
+  apiKey: process.env.MISTRAL_API_KEY,
+});
 
-export async function POST(request: NextRequest) {
-    try {
-        console.log("🎤 Mistral STT API request received");
-
-        // Parse form data
-        const formData = await request.formData();
-        const audioFile = formData.get('audio') as File;
-
-        if (!audioFile) {
-            return NextResponse.json(
-                { error: "No audio file provided" },
-                { status: 400 }
-            );
-        }
-
-        // Validate file
-        const validation = validateAudioFile(audioFile);
-        if (!validation.valid) {
-            return NextResponse.json(
-                { error: validation.error },
-                { status: 400 }
-            );
-        }
-
-        // Get options from form data
-        const options = {
-            language: formData.get('language') as string || 'auto',
-            enableCleanup: formData.get('enableCleanup') !== 'false',
-            enableTimestamps: formData.get('enableTimestamps') === 'true',
-            maxRetries: parseInt(formData.get('maxRetries') as string) || 2
-        };
-
-        console.log(`📁 Processing audio file: ${audioFile.name} (${(audioFile.size / 1024 / 1024).toFixed(2)}MB)`);
-
-        // For this API, we need to save the file temporarily and get a URL
-        // In a real implementation, you'd upload to a storage service
-        // For demo purposes, we'll use a data URL approach
-
-        // Convert file to base64 data URL for processing
-        const arrayBuffer = await audioFile.arrayBuffer();
-        const base64 = Buffer.from(arrayBuffer).toString('base64');
-        const dataUrl = `data:${audioFile.type};base64,${base64}`;
-
-        // Note: This is a simplified approach. In production, you'd:
-        // 1. Upload file to cloud storage (S3, Cloudinary, etc.)
-        // 2. Get a public URL
-        // 3. Process with that URL
-
-        // For now, we'll simulate with the data URL
-        // In practice, you'd modify transcribeAudioWithMistral to accept ArrayBuffer directly
-
-        // Since our current implementation expects a URL, we'll need to adapt
-        // For this demo, we'll return a placeholder response
-
-        const mockResult = {
-            rawTranscript: "This is a sample transcript that would be generated from the audio.",
-            cleanedTranscript: "This is a cleaned and normalized transcript enhanced by Mistral AI.",
-            language: "english",
-            confidence: 0.92,
-            duration: 0,
-            wordCount: 12,
-            processingTime: 1250,
-            method: "mistral_enhanced"
-        };
-
-        console.log("✅ Transcription completed successfully");
-
-        return NextResponse.json({
-            success: true,
-            data: mockResult,
-            message: "Audio transcribed successfully with Mistral enhancement"
-        });
-
-    } catch (error) {
-        console.error("❌ Mistral STT API error:", error);
-
-        return NextResponse.json(
-            {
-                error: "Transcription failed",
-                details: error instanceof Error ? error.message : "Unknown error"
-            },
-            { status: 500 }
-        );
-    }
+interface TranscriptionResult {
+  rawTranscript: string;
+  cleanedTranscript: string;
+  language?: string;
+  timestamps?: Array<{
+    start: number;
+    end: number;
+    text: string;
+  }>;
 }
 
-// GET endpoint for API documentation
-export async function GET() {
-    return NextResponse.json({
-        name: "Mistral-Enhanced Speech-to-Text API",
-        version: "1.0.0",
-        description: "High-quality voice-to-text using Local Whisper + Mistral AI enhancement",
-        endpoint: "POST /api/stt/mistral",
-        contentType: "multipart/form-data",
-        parameters: {
-            audio: "File - Audio file (wav, mp3, webm, m4a, ogg)",
-            language: "String - Language hint (optional, default: 'auto')",
-            enableCleanup: "Boolean - Enable Mistral text enhancement (default: true)",
-            enableTimestamps: "Boolean - Include timestamps (default: false)",
-            maxRetries: "Number - Max retry attempts (default: 2)"
-        },
-        supportedFormats: ["audio/wav", "audio/mpeg", "audio/webm", "audio/mp4", "audio/ogg"],
-        maxFileSize: "25MB",
-        response: {
-            success: true,
-            data: {
-                rawTranscript: "Original transcript",
-                cleanedTranscript: "Mistral-enhanced transcript",
-                language: "Detected language",
-                confidence: 0.92,
-                wordCount: 15,
-                processingTime: 1200,
-                method: "mistral_enhanced"
-            }
-        }
+/**
+ * Validates file type and size
+ */
+function validateAudioFile(file: File): { isValid: boolean; error?: string } {
+  const allowedTypes = ['audio/wav', 'audio/mpeg', 'audio/webm', 'audio/mp4', 'audio/x-m4a'];
+  const maxSize = 25 * 1024 * 1024; // 25MB limit
+
+  if (!allowedTypes.includes(file.type)) {
+    return {
+      isValid: false,
+      error: `Unsupported file type. Allowed: ${allowedTypes.join(', ')}`
+    };
+  }
+
+  if (file.size > maxSize) {
+    return {
+      isValid: false,
+      error: `File too large. Maximum size: 25MB`
+    };
+  }
+
+  return { isValid: true };
+}
+
+/**
+ * Normalizes and cleans the transcript text
+ */
+function normalizeTranscript(text: string): string {
+  return text
+    // Fix spacing around punctuation
+    .replace(/(\w)([.,!?;:])/g, '$1$2')
+    .replace(/([.,!?;:])(\w)/g, '$1 $2')
+    // Remove extra spaces
+    .replace(/\s+/g, ' ')
+    // Capitalize first letter of sentences
+    .replace(/(^\w|\.\s*\w)/g, (match) => match.toUpperCase())
+    // Trim whitespace
+    .trim();
+}
+
+/**
+ * Processes audio file with Mistral STT API
+ */
+async function transcribeAudio(audioBuffer: ArrayBuffer, filename: string): Promise<TranscriptionResult> {
+  try {
+    // Create a Blob from the ArrayBuffer
+    const audioBlob = new Blob([audioBuffer], { type: 'audio/webm' });
+
+    // Call Mistral STT API
+    const response = await client.audio.transcriptions.complete({
+      file: audioBlob,
+      model: 'mistral-large-latest',
+      timestampGranularities: ['segment'],
     });
+
+    const rawTranscript = response.text || '';
+    const cleanedTranscript = normalizeTranscript(rawTranscript);
+
+    // Extract timestamps if available
+    const timestamps = response.segments?.map(segment => ({
+      start: segment.start || 0,
+      end: segment.end || 0,
+      text: segment.text || '',
+    }));
+
+    return {
+      rawTranscript,
+      cleanedTranscript,
+      language: response.language || undefined,
+      timestamps,
+    };
+
+  } catch (error) {
+    console.error('Mistral STT API error:', error);
+    throw new Error(`Transcription failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+/**
+ * POST handler for audio transcription
+ */
+export async function POST(request: NextRequest) {
+  try {
+    const formData = await request.formData();
+    const file = formData.get('audio') as File;
+
+    if (!file) {
+      return NextResponse.json(
+        { error: 'No audio file provided' },
+        { status: 400 }
+      );
+    }
+
+    // Validate file
+    const validation = validateAudioFile(file);
+    if (!validation.isValid) {
+      return NextResponse.json(
+        { error: validation.error },
+        { status: 400 }
+      );
+    }
+
+    // Convert file to ArrayBuffer
+    const arrayBuffer = await file.arrayBuffer();
+
+    // Transcribe audio
+    const result = await transcribeAudio(arrayBuffer, file.name);
+
+    return NextResponse.json({
+      success: true,
+      data: result,
+    });
+
+  } catch (error) {
+    console.error('Transcription error:', error);
+
+    // Handle specific API errors
+    if (error instanceof Error) {
+      if (error.message.includes('rate limit')) {
+        return NextResponse.json(
+          { error: 'Rate limit exceeded. Please try again later.' },
+          { status: 429 }
+        );
+      }
+      if (error.message.includes('authentication')) {
+        return NextResponse.json(
+          { error: 'Authentication failed. Check API key.' },
+          { status: 401 }
+        );
+      }
+    }
+
+    return NextResponse.json(
+      { error: 'Transcription failed. Please try again.' },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * GET handler for health check
+ */
+export async function GET() {
+  return NextResponse.json({
+    status: 'STT service is running',
+    supportedFormats: ['wav', 'mp3', 'webm', 'm4a'],
+    maxFileSize: '25MB',
+  });
 }
