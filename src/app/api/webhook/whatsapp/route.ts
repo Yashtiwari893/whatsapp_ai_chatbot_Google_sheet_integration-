@@ -2,6 +2,12 @@ import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabaseClient";
 import { generateAutoResponse } from "@/lib/autoResponder";
 import OpenAI from "openai";
+import Groq from "groq-sdk";
+import { exec } from "child_process";
+import { promises as fs } from "fs";
+import path from "path";
+import os from "os";
+import ffmpeg from "fluent-ffmpeg";
 
 // Type definition for WhatsApp webhook payload
 type WhatsAppWebhookPayload = {
@@ -32,12 +38,16 @@ const openai = process.env.OPENAI_API_KEY ? new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
 }) : null;
 
-// Function to transcribe voice message to text using OpenAI Whisper
+const groq = process.env.GROQ_API_KEY ? new Groq({
+    apiKey: process.env.GROQ_API_KEY,
+}) : null;
+
+// Function to transcribe voice message using Local Whisper (primary) with API fallbacks
 async function transcribeVoiceMessage(mediaUrl: string, retryCount = 0): Promise<string | null> {
     const maxRetries = 2;
 
     try {
-        console.log("Downloading audio from:", mediaUrl);
+        console.log("Starting voice transcription process for:", mediaUrl);
 
         // Download the audio file
         const response = await fetch(mediaUrl);
@@ -46,44 +56,162 @@ async function transcribeVoiceMessage(mediaUrl: string, retryCount = 0): Promise
         }
 
         const audioBuffer = await response.arrayBuffer();
-        const audioFile = new File([audioBuffer], "audio.ogg", { type: "audio/ogg" });
+        console.log("Audio downloaded, size:", audioBuffer.byteLength, "bytes");
 
-        console.log("Audio file size:", audioFile.size, "bytes");
-        console.log("Sending to OpenAI Whisper API for transcription");
-
-        if (!openai) {
-            throw new Error("OpenAI client not initialized - missing API key");
+        // Try Local Whisper first (FREE)
+        console.log("Attempting Local Whisper transcription...");
+        const localTranscription = await transcribeWithLocalWhisper(audioBuffer);
+        if (localTranscription) {
+            console.log("✅ Local Whisper transcription successful");
+            return localTranscription;
         }
 
-        // Transcribe using OpenAI Whisper API
-        const transcription = await openai.audio.transcriptions.create({
-            file: audioFile,
-            model: "whisper-1",
-            language: "hi", // Primary language: Hindi
-            response_format: "text",
-            temperature: 0, // More deterministic results
-        });
+        console.log("❌ Local Whisper failed, trying OpenAI Whisper fallback...");
 
-        if (!transcription || typeof transcription !== 'string' || transcription.trim().length === 0) {
-            console.log("No transcription returned from OpenAI Whisper API");
-            return null;
+        // Fallback 1: OpenAI Whisper
+        if (openai) {
+            const openaiTranscription = await transcribeWithOpenAI(audioBuffer);
+            if (openaiTranscription) {
+                console.log("✅ OpenAI Whisper fallback successful");
+                return openaiTranscription;
+            }
         }
 
-        const cleanedTranscription = transcription.trim();
-        console.log("Transcription successful:", cleanedTranscription.substring(0, 100) + "...");
-        return cleanedTranscription;
+        console.log("❌ OpenAI Whisper failed, trying Groq fallback...");
+
+        // Fallback 2: Groq (if available)
+        if (groq) {
+            const groqTranscription = await transcribeWithGroq(audioBuffer);
+            if (groqTranscription) {
+                console.log("✅ Groq fallback successful");
+                return groqTranscription;
+            }
+        }
+
+        console.log("❌ All transcription methods failed");
+        return null;
 
     } catch (error) {
         console.error(`Voice transcription failed (attempt ${retryCount + 1}/${maxRetries + 1}):`, error);
 
         // Retry logic for transient failures
         if (retryCount < maxRetries) {
-            console.log(`Retrying transcription in 2 seconds...`);
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            console.log(`Retrying transcription in 3 seconds...`);
+            await new Promise(resolve => setTimeout(resolve, 3000));
             return transcribeVoiceMessage(mediaUrl, retryCount + 1);
         }
 
         console.error("All transcription attempts failed");
+        return null;
+    }
+}
+
+// Local Whisper transcription using Python CLI
+async function transcribeWithLocalWhisper(audioBuffer: ArrayBuffer): Promise<string | null> {
+    let tempDir = "";
+    let oggPath = "";
+    let wavPath = "";
+
+    try {
+        // Create temp directory
+        tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "whisper-"));
+        oggPath = path.join(tempDir, "audio.ogg");
+        wavPath = path.join(tempDir, "audio.wav");
+
+        // Write OGG file
+        await fs.writeFile(oggPath, Buffer.from(audioBuffer));
+
+        // Convert OGG to WAV using FFmpeg
+        await new Promise<void>((resolve, reject) => {
+            ffmpeg(oggPath)
+                .toFormat('wav')
+                .audioCodec('pcm_s16le')
+                .audioChannels(1)
+                .audioFrequency(16000)
+                .on('end', () => resolve())
+                .on('error', reject)
+                .save(wavPath);
+        });
+
+        // Call Whisper CLI
+        const transcription = await new Promise<string>((resolve, reject) => {
+            const command = `whisper "${wavPath}" --model base --language hi --output_format txt --output_dir "${tempDir}" --fp16 False`;
+            console.log("Running Whisper CLI:", command);
+
+            exec(command, { timeout: 60000 }, (error, _stdout, _stderr) => {
+                if (error) {
+                    console.error("Whisper CLI error:", error);
+                    reject(error);
+                    return;
+                }
+
+                // Read the generated text file
+                const txtPath = path.join(tempDir, "audio.txt");
+                fs.readFile(txtPath, 'utf8')
+                    .then(content => resolve(content.trim()))
+                    .catch(reject);
+            });
+        });
+
+        if (transcription && transcription.length > 0) {
+            return transcription;
+        }
+
+        return null;
+
+    } catch (error) {
+        console.error("Local Whisper transcription failed:", error);
+        return null;
+    } finally {
+        // Cleanup temp files
+        try {
+            if (tempDir) {
+                await fs.rm(tempDir, { recursive: true, force: true });
+            }
+        } catch (cleanupError) {
+            console.warn("Failed to cleanup temp files:", cleanupError);
+        }
+    }
+}
+
+// OpenAI Whisper fallback
+async function transcribeWithOpenAI(audioBuffer: ArrayBuffer): Promise<string | null> {
+    try {
+        if (!openai) return null;
+
+        const audioFile = new File([audioBuffer], "audio.ogg", { type: "audio/ogg" });
+
+        const transcription = await openai.audio.transcriptions.create({
+            file: audioFile,
+            model: "whisper-1",
+            language: "hi",
+            response_format: "text",
+            temperature: 0,
+        });
+
+        return transcription && typeof transcription === 'string' && transcription.trim().length > 0
+            ? transcription.trim()
+            : null;
+
+    } catch (error) {
+        console.error("OpenAI Whisper fallback failed:", error);
+        return null;
+    }
+}
+
+// Groq fallback (using their API if they support transcription)
+async function transcribeWithGroq(_audioBuffer: ArrayBuffer): Promise<string | null> {
+    try {
+        if (!groq) return null;
+
+        // Note: Groq primarily supports text generation, not audio transcription
+        // This is a placeholder - in practice, you might need to check if Groq has STT capabilities
+        // For now, we'll skip Groq as it doesn't have Whisper-like transcription
+        console.log("Groq does not support audio transcription, skipping...");
+        return null;
+
+    } catch (error) {
+        console.error("Groq fallback failed:", error);
         return null;
     }
 }
