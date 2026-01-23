@@ -9,6 +9,7 @@ import path from "path";
 import os from "os";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegStatic from "ffmpeg-static";
+import { transcribeAudioWithMistral } from "@/lib/mistralStt";
 
 // Set FFmpeg path to use bundled binary
 if (ffmpegStatic) {
@@ -49,7 +50,7 @@ const groq = process.env.GROQ_API_KEY ? new Groq({
 }) : null;
 
 // Function to transcribe voice message using Local Whisper (primary) with API fallbacks
-async function transcribeVoiceMessage(mediaUrl: string, retryCount = 0): Promise<string | null> {
+export async function transcribeVoiceMessage(mediaUrl: string, retryCount = 0): Promise<string | null> {
     const maxRetries = 2;
 
     try {
@@ -311,19 +312,31 @@ export async function POST(req: Request) {
         });
 
         if (isVoiceMessage && payload.content?.media?.url && !alreadyResponded) {
-            console.log("Voice message detected, transcribing...");
-            const transcription = await transcribeVoiceMessage(payload.content.media.url);
-            if (transcription) {
-                messageText = transcription;
-                console.log("Using transcribed text for auto-response");
+            console.log("Voice message detected, transcribing with Mistral-enhanced STT...");
+            const transcriptionResult = await transcribeAudioWithMistral(payload.content.media.url, {
+                enableCleanup: true,
+                language: 'auto',
+                maxRetries: 2
+            });
 
-                // Update the database with transcribed text
+            if (transcriptionResult) {
+                messageText = transcriptionResult.cleanedTranscript;
+                console.log(`✅ Using Mistral-enhanced transcript: "${messageText.substring(0, 100)}..."`);
+                console.log(`📊 Language: ${transcriptionResult.language}, Confidence: ${(transcriptionResult.confidence * 100).toFixed(1)}%`);
+
+                // Update the database with both raw and cleaned transcript
                 await supabase
                     .from("whatsapp_messages")
-                    .update({ content_text: messageText })
+                    .update({
+                        content_text: messageText,
+                        raw_transcript: transcriptionResult.rawTranscript,
+                        transcript_language: transcriptionResult.language,
+                        transcript_confidence: transcriptionResult.confidence,
+                        transcript_method: transcriptionResult.method
+                    })
                     .eq("message_id", payload.messageId);
             } else {
-                console.log("Transcription failed, skipping auto-response for voice message");
+                console.log("❌ Transcription failed, skipping auto-response for voice message");
                 messageText = undefined; // Skip processing if transcription fails
             }
         }

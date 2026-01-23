@@ -1,7 +1,18 @@
-# Local Whisper Setup for Production
+# Local Whisper + Mistral AI Enhanced STT Setup
 
-## Prerequisites
-Ensure your deployment environment has the following installed:
+## Overview
+This system provides **high-quality, production-ready speech-to-text** using:
+1. **Local Whisper** (Free, primary STT engine)
+2. **Mistral AI** (Text enhancement and normalization)
+3. **API Fallbacks** (OpenAI, Groq for reliability)
+
+## Key Features
+- ✅ **100% FREE** primary transcription (Local Whisper)
+- ✅ **AI-Enhanced** transcripts (Mistral post-processing)
+- ✅ **Multilingual** support (Hindi, English, Hinglish, Gujarati+)
+- ✅ **Production-Ready** with fallbacks and error handling
+- ✅ **Real-time** WhatsApp integration
+- ✅ **Confidence Scoring** and quality metrics
 
 ### 1. Python 3.8+
 ```bash
@@ -50,11 +61,17 @@ pip3 install openai-whisper
 whisper --model base
 ```
 
-## Configuration
-- The system automatically detects Hindi/Hinglish/English
-- Uses `base` model for optimal speed/accuracy balance
-- Audio is converted to 16kHz WAV for Whisper compatibility
-- Temporary files are automatically cleaned up
+## Mistral AI Enhancement Features
+- **Text Normalization**: Fixes punctuation, capitalization, spacing
+- **Error Correction**: Removes transcription artifacts and typos
+- **Language Detection**: Automatic language identification
+- **Content Cleaning**: Handles filler words, repetitions, background noise
+- **Professional Formatting**: Converts speech patterns to readable text
+
+## API Endpoints
+- `POST /api/stt/mistral` - Direct STT API for file uploads
+- `GET /stt` - Web interface for testing
+- WhatsApp webhook automatically uses enhanced STT
 
 ## Troubleshooting
 - If Whisper fails, it falls back to OpenAI API
