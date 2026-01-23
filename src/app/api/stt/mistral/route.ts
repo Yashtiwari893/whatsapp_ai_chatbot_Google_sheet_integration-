@@ -68,7 +68,7 @@ export async function transcribeAudio(audioBuffer: ArrayBuffer, filename: string
     // Call Mistral STT API
     const response = await client.audio.transcriptions.complete({
       file: audioBlob,
-      model: 'mistral-large-latest',
+      model: 'voxtral-mini-latest',
       timestampGranularities: ['segment'],
     });
 
