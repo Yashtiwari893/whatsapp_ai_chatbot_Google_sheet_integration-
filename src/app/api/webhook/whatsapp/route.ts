@@ -8,6 +8,12 @@ import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
 import ffmpeg from "fluent-ffmpeg";
+import ffmpegStatic from "ffmpeg-static";
+
+// Set FFmpeg path to use bundled binary
+if (ffmpegStatic) {
+    ffmpeg.setFfmpegPath(ffmpegStatic);
+}
 
 // Type definition for WhatsApp webhook payload
 type WhatsAppWebhookPayload = {
@@ -113,6 +119,13 @@ async function transcribeWithLocalWhisper(audioBuffer: ArrayBuffer): Promise<str
     let wavPath = "";
 
     try {
+        // Check if whisper command is available
+        const whisperAvailable = await checkWhisperAvailability();
+        if (!whisperAvailable) {
+            console.log("Whisper CLI not available in this environment, skipping local transcription");
+            return null;
+        }
+
         // Create temp directory
         tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "whisper-"));
         oggPath = path.join(tempDir, "audio.ogg");
@@ -129,7 +142,10 @@ async function transcribeWithLocalWhisper(audioBuffer: ArrayBuffer): Promise<str
                 .audioChannels(1)
                 .audioFrequency(16000)
                 .on('end', () => resolve())
-                .on('error', reject)
+                .on('error', (err) => {
+                    console.error("FFmpeg conversion failed:", err);
+                    reject(err);
+                })
                 .save(wavPath);
         });
 
@@ -172,6 +188,21 @@ async function transcribeWithLocalWhisper(audioBuffer: ArrayBuffer): Promise<str
             console.warn("Failed to cleanup temp files:", cleanupError);
         }
     }
+}
+
+// Check if Whisper CLI is available
+async function checkWhisperAvailability(): Promise<boolean> {
+    return new Promise((resolve) => {
+        exec('whisper --help', { timeout: 5000 }, (error) => {
+            if (error) {
+                console.log("Whisper CLI not available:", error.message);
+                resolve(false);
+            } else {
+                console.log("Whisper CLI is available");
+                resolve(true);
+            }
+        });
+    });
 }
 
 // OpenAI Whisper fallback
