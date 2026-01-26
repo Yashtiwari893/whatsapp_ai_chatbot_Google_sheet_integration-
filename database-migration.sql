@@ -88,3 +88,21 @@ BEGIN
     LIMIT match_count;
 END;
 $$;
+
+-- Create google_doc_mappings table
+CREATE TABLE IF NOT EXISTS google_doc_mappings (
+    phone_number TEXT PRIMARY KEY,
+    doc_id TEXT NOT NULL,
+    doc_name TEXT,
+    last_synced_at TIMESTAMPTZ,
+    last_chunk_count INTEGER DEFAULT 0
+);
+
+-- Create index for google_doc_mappings
+CREATE INDEX IF NOT EXISTS idx_google_doc_mappings_phone ON google_doc_mappings(phone_number);
+
+-- Enable RLS for google_doc_mappings
+ALTER TABLE google_doc_mappings ENABLE ROW LEVEL SECURITY;
+
+-- Create policy for google_doc_mappings
+CREATE POLICY "Allow all operations on google_doc_mappings" ON google_doc_mappings FOR ALL USING (true);

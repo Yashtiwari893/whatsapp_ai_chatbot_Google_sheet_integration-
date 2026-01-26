@@ -6,6 +6,8 @@ import { FileUpload } from "@/components/ui/file-upload";
 import { Switch } from "@/components/ui/switch";
 import { SyncGoogleSheetButton } from "@/components/ui/sync-google-sheet-button";
 import { SaveGoogleSheet } from "@/components/ui/save-google-sheet";
+import { SyncGoogleDocButton } from "@/components/ui/sync-google-doc-button";
+import { SaveGoogleDoc } from "@/components/ui/save-google-doc";
 
 /* ================= TYPES ================= */
 
@@ -527,6 +529,38 @@ export default function FilesPage() {
 
                                         {selectedPhoneNumber && (
                                             <SyncGoogleSheetButton phoneNumber={selectedPhoneNumber} />
+                                        )}
+                                    </div>
+
+                                    {/* Google Doc Source Section */}
+                                    <div className="border rounded-lg p-6 bg-white">
+                                        <h3 className="text-lg font-semibold mb-2">
+                                            Google Doc Knowledge Source
+                                        </h3>
+                                        <p className="text-sm text-gray-600 mb-4">
+                                            Configure Google Doc URL for this WhatsApp number. One doc per number.
+                                        </p>
+
+                                        {selectedPhoneNumber ? (
+                                            <SaveGoogleDoc phoneNumber={selectedPhoneNumber} />
+                                        ) : (
+                                            <p className="text-sm text-gray-500">
+                                                Select a phone number first
+                                            </p>
+                                        )}
+                                    </div>
+
+                                    {/* Google Doc Sync Section */}
+                                    <div className="border rounded-lg p-6 bg-white">
+                                        <h3 className="text-lg font-semibold mb-2">
+                                            Google Doc Knowledge Sync
+                                        </h3>
+                                        <p className="text-sm text-gray-600 mb-4">
+                                            Manual button click se Google Doc ka latest data embeddings me add hoga. Old knowledge safe rahega.
+                                        </p>
+
+                                        {selectedPhoneNumber && (
+                                            <SyncGoogleDocButton phoneNumber={selectedPhoneNumber} />
                                         )}
                                     </div>
 
