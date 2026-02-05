@@ -83,6 +83,49 @@ async function testWebhook() {
 
         console.log('\n' + '='.repeat(60));
         console.log('✅ All tests completed!');
+
+        // Test 5: Voice message (should be transcribed and processed)
+        console.log('\n📤 Test 5: Sending a voice message payload (media.type = "voice")...');
+        const voicePayload = {
+            ...samplePayload,
+            messageId: `test-voice-${Date.now()}`,
+            content: {
+                contentType: "media",
+                media: {
+                    type: "voice",
+                    url: "https://example.com/test-voice.ogg"
+                }
+            },
+            event: "MoMessage",
+            isin24window: true
+        };
+
+        const response5 = await fetch(`${BASE_URL}/api/webhook/whatsapp`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(voicePayload)
+        });
+        const result5 = await response5.json();
+        console.log('Status:', response5.status);
+        console.log('Response:', JSON.stringify(result5, null, 2));
+
+        // Test 6: Voice message outside 24-hour window (should send template or fallback text)
+        console.log('\n📤 Test 6: Sending voice message outside 24-hour window...');
+        const voicePayloadOutside = {
+            ...voicePayload,
+            messageId: `test-voice-outside-${Date.now()}`,
+            isin24window: false
+        };
+
+        const response6 = await fetch(`${BASE_URL}/api/webhook/whatsapp`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(voicePayloadOutside)
+        });
+        const result6 = await response6.json();
+        console.log('Status:', response6.status);
+        console.log('Response:', JSON.stringify(result6, null, 2));
+
         console.log('\nTo test with your live server:');
         console.log('node test-webhook.js https://your-app.vercel.app');
     } catch (error) {
