@@ -201,95 +201,88 @@ export async function POST(req: Request) {
       }
     }
 
-    // 8️⃣ Update changed chunks
-    if (toUpdate.length > 0) {
-      try {
-        for (const chunk of toUpdate) {
-          const existing = existingHashToChunk.get(chunk.hash)!;
-          const newEmbedding = await embedText(chunk.content);
-
-          const { error: updateError } = await supabase
-            .from("chunks")
-            .update({
-              content: chunk.content,
-              embedding: newEmbedding
-            })
-            .eq("id", existing.id);
-
-          if (updateError) {
-            console.error("Error updating chunk:", updateError);
-            return NextResponse.json(
-              { error: "Failed to update chunk" },
-              { status: 500 }
-            );
-          }
-        }
-
-        updated = toUpdate.length;
-        console.log(`Updated ${updated} chunks`);
-      } catch (updateError) {
-        console.error("Error during update:", updateError);
-        return NextResponse.json(
-          { error: "Failed to update chunks" },
-          { status: 500 }
-        );
-      }
-    }
-
-    // 9️⃣ Add new chunks with batch processing
+    // 8️⃣ Add new chunks with embeddings (batched)
     if (toAdd.length > 0) {
       try {
-        // Process in batches to avoid rate limits
         const BATCH_SIZE = 50;
         const BATCH_DELAY_MS = 61000;
 
         for (let i = 0; i < toAdd.length; i += BATCH_SIZE) {
           const batch = toAdd.slice(i, i + BATCH_SIZE);
-          const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
-          const totalBatches = Math.ceil(toAdd.length / BATCH_SIZE);
 
-          console.log(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} chunks)...`);
+          // Generate embeddings in parallel for this batch
+          const embeddings = await Promise.all(batch.map(c => embedText(c.content)));
 
-          // Generate embeddings for batch
-          const embeddings = await Promise.all(
-            batch.map(chunk => embedText(chunk.content))
-          );
-
-          // Prepare data for insertion
-          const chunksToInsert = batch.map((chunk, idx) => ({
+          const chunksToInsert = batch.map((c, idx) => ({
             phone_number,
-            content: chunk.content,
+            content: c.content,
             embedding: embeddings[idx],
             source: "google_doc",
-            row_hash: chunk.hash
+            row_hash: c.hash
           }));
 
-          // Insert chunks
           const { error: insertError } = await supabase
             .from("chunks")
             .insert(chunksToInsert);
 
           if (insertError) {
-            console.error("Error inserting chunks:", insertError);
+            console.error("Error inserting chunk batch:", insertError);
             return NextResponse.json(
-              { error: "Failed to save chunks" },
+              { error: "Failed to insert new chunks" },
               { status: 500 }
             );
           }
 
-          // Wait before next batch
+          added += batch.length;
+
           if (i + BATCH_SIZE < toAdd.length) {
-            console.log(`Waiting ${BATCH_DELAY_MS / 1000}s before next batch...`);
-            await new Promise(resolve => setTimeout(resolve, BATCH_DELAY_MS));
+            await new Promise(res => setTimeout(res, BATCH_DELAY_MS));
           }
         }
 
-        added = toAdd.length;
         console.log(`Added ${added} new chunks`);
       } catch (addError) {
-        console.error("Error during addition:", addError);
+        console.error("Database error during addition:", addError);
         return NextResponse.json(
-          { error: "Failed to add new chunks" },
+          { error: "Database error during addition" },
+          { status: 500 }
+        );
+      }
+    }
+
+    // 9️⃣ Update existing chunks (if content changed)
+    if (toUpdate.length > 0) {
+      try {
+        for (const chunk of toUpdate) {
+          const embedding = await embedText(chunk.content);
+
+          const existing = existingHashToChunk.get(chunk.hash);
+          if (existing) {
+            const { error: updateError } = await supabase
+              .from("chunks")
+              .update({
+                content: chunk.content,
+                embedding
+              })
+              .eq("id", existing.id);
+
+            if (updateError) {
+              console.error("Error updating chunk:", updateError);
+              return NextResponse.json(
+                { error: "Failed to update chunk" },
+                { status: 500 }
+              );
+            }
+
+            updated++;
+          }
+        }
+
+        console.log(`Updated ${updated} chunks`);
+      } catch (updateError) {
+        console.error("Database error during update:", updateError);
+        return NextResponse.json(
+          { error: "Database error during update" },
           { status: 500 }
         );
       }

@@ -33,7 +33,7 @@ export async function POST(req: Request) {
         // 2. Retrieve relevant chunks
         const matches = await retrieveRelevantChunks(queryEmbedding, file_id, 5);
 
-        const contextText = matches.map((m) => m.content).join("\n\n");
+        const contextText = matches.map((m) => (m as any).chunk || (m as any).content || "").join("\n\n");
 
         // 3. Load conversation history
         const { data: historyRows } = await supabase

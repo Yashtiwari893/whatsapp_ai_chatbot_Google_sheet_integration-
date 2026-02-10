@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabaseClient";
+import { getGoogleDocMetadata } from "@/lib/googleDoc";
 
 export async function POST(req: Request) {
   try {
@@ -8,7 +9,7 @@ export async function POST(req: Request) {
     const body = await req.json();
     console.log("Request body:", body);
 
-    const { phone_number, doc_url, doc_name } = body;
+    const { phone_number, doc_url } = body;
 
     if (!phone_number || !doc_url) {
       return NextResponse.json(
@@ -42,6 +43,15 @@ export async function POST(req: Request) {
 
     console.log("Existing record:", existing);
 
+    // Try to fetch doc metadata (title) and include in mapping if available
+    let docName = null;
+    try {
+      const meta = await getGoogleDocMetadata(doc_id);
+      docName = meta.title;
+    } catch (metaErr) {
+      console.warn("Could not fetch doc metadata:", metaErr);
+    }
+
     // Now try the upsert
     console.log("Attempting upsert...");
     const { error } = await supabase
@@ -50,7 +60,7 @@ export async function POST(req: Request) {
         {
           phone_number,
           doc_id,
-          doc_name: doc_name || null,
+          doc_name: docName,
           last_synced_at: null,
           last_chunk_count: 0
         },

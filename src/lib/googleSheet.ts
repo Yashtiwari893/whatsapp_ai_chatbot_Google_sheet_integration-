@@ -1,10 +1,7 @@
 import { google } from "googleapis";
+import createGoogleJwt from "./googleAuth";
 
-const auth = new google.auth.JWT({
-  email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-  key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
-  scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-});
+const auth = createGoogleJwt(["https://www.googleapis.com/auth/spreadsheets.readonly"]);
 
 export async function readGoogleSheet(sheetId: string, range: string = "Sheet1"): Promise<any[][]> {
   const sheets = google.sheets({ version: "v4", auth });

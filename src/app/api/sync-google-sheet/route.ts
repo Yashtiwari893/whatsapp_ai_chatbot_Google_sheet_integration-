@@ -160,7 +160,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // 6️⃣ Calculate what to add, delete, update
+    // 5️⃣ Calculate what to add, delete, update
     const existingHashes = new Set(existingChunks.map(c => c.row_hash));
     const existingHashToChunk = new Map(existingChunks.map(c => [c.row_hash, c]));
 
@@ -177,7 +177,7 @@ export async function POST(req: Request) {
     let deleted = 0;
     let updated = 0;
 
-    // 7️⃣ Delete old chunks
+    // 6️⃣ Delete old chunks
     if (toDelete.length > 0) {
       try {
         const deleteIds = toDelete.map(chunk => chunk.id);
@@ -205,7 +205,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // 8️⃣ Update changed chunks
+    // 7️⃣ Update changed chunks
     if (toUpdate.length > 0) {
       try {
         for (const row of toUpdate) {

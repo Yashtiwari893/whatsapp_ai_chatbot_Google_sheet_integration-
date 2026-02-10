@@ -169,65 +169,6 @@ export async function POST(req: Request) {
                     })
                     .eq("message_id", payload.messageId);
 
-                // If inside 24-hour window -> send a normal text fallback
-                if (payload.isin24window) {
-                    if (authToken && origin) {
-                        await sendWhatsAppMessage(payload.from, "🎧 Voice message received. Please type your message.", authToken, origin);
-                    }
-
-                    await supabase
-                        .from("whatsapp_messages")
-                        .insert([{
-                            message_id: `auto_${payload.messageId}_${Date.now()}`,
-                            channel: "whatsapp",
-                            from_number: payload.to,
-                            to_number: payload.from,
-                            received_at: new Date().toISOString(),
-                            content_type: "text",
-                            content_text: "🎧 Voice message received. Please type your message.",
-                            sender_name: "AI Assistant",
-                            event_type: "MtMessage",
-                            is_in_24_window: true,
-                            is_responded: false,
-                            auto_respond_sent: true,
-                            raw_payload: { messageId: payload.messageId, isAutoResponse: true }
-                        }]);
-
-                    return;
-                }
-
-                // Outside 24-hour window -> try to send an approved template
-                const templateId = process.env.WHATSAPP_DEFAULT_TEMPLATE_ID || mapping?.outside_24h_template_id || mapping?.template_id;
-
-                if (templateId && authToken && origin) {
-                    await sendWhatsAppTemplate(payload.from, { templateId: templateId, parameters: {} }, authToken, origin);
-
-                    await supabase
-                        .from("whatsapp_messages")
-                        .insert([{
-                            message_id: `auto_${payload.messageId}_${Date.now()}`,
-                            channel: "whatsapp",
-                            from_number: payload.to,
-                            to_number: payload.from,
-                            received_at: new Date().toISOString(),
-                            content_type: "template",
-                            content_text: `Template:${templateId}`,
-                            sender_name: "AI Assistant",
-                            event_type: "MtMessage",
-                            is_in_24_window: false,
-                            is_responded: false,
-                            auto_respond_sent: true,
-                            raw_payload: { messageId: payload.messageId, isAutoResponse: true, templateId }
-                        }]);
-
-                    return;
-                }
-
-                // If no template is configured, fallback to text with a short note
-                if (authToken && origin) {
-                    await sendWhatsAppMessage(payload.from, "🎧 We received your voice message but cannot reply outside the 24-hour window. Please type your message or message again when possible.", authToken, origin);
-                }
-
                 await supabase
                     .from("whatsapp_messages")
                     .insert([{
@@ -237,7 +178,6 @@ export async function POST(req: Request) {
                         to_number: payload.from,
                         received_at: new Date().toISOString(),
                         content_type: "text",
-                        content_text: "🎧 We received your voice message but cannot reply outside the 24-hour window. Please type your message or message again when possible.",
                         sender_name: "AI Assistant",
                         event_type: "MtMessage",
                         is_in_24_window: false,
@@ -277,12 +217,13 @@ export async function POST(req: Request) {
             }
         }
 
-        // Trigger auto-response if it's a user message and hasn't been responded to yet
+        // Trigger auto-response for all user messages (text or transcribed voice)
         if (messageText && payload.event === "MoMessage" && !alreadyResponded) {
             console.log("Processing auto-response for message:", payload.messageId);
+            console.log("Message will be 24-hour window processed:", true);
 
-            // If inside 24-hour window -> generate a dynamic reply
-            if (payload.isin24window) {
+            try {
+                // ALWAYS try to generate a proper auto-response for user messages
                 const result = await generateAutoResponse(
                     payload.from,
                     payload.to,
@@ -303,10 +244,44 @@ export async function POST(req: Request) {
                         .eq("message_id", payload.messageId);
 
                 } else {
-                    console.error("❌ Auto-response failed:", result.error);
+                    console.error("❌ Auto-response generation failed:", result.error);
+                    
+                    // If auto-response fails, send a helpful error message
+                    try {
+                        const { data: mapping } = await supabase
+                            .from("phone_document_mapping")
+                            .select("*")
+                            .eq("phone_number", payload.to)
+                            .single();
+
+                        const authToken = mapping?.auth_token;
+                        const origin = mapping?.origin;
+
+                        if (authToken && origin) {
+                            await sendWhatsAppMessage(
+                                payload.from,
+                                "Hi! 👋 I received your message. I'm processing your request. Please try again in a moment if you don't hear back.",
+                                authToken,
+                                origin
+                            );
+                        }
+
+                        // Log the failed attempt but mark as responded
+                        await supabase
+                            .from("whatsapp_messages")
+                            .update({
+                                auto_respond_sent: true,
+                                response_sent_at: new Date().toISOString()
+                            })
+                            .eq("message_id", payload.messageId);
+                    } catch (err) {
+                        console.error("Error sending fallback message:", err);
+                    }
                 }
-            } else {
-                // Outside 24-hour window -> try to send an approved template instead of arbitrary text
+            } catch (err) {
+                console.error("Unexpected error in auto-response processing:", err);
+                
+                // Send a friendly error message
                 try {
                     const { data: mapping } = await supabase
                         .from("phone_document_mapping")
@@ -316,72 +291,25 @@ export async function POST(req: Request) {
 
                     const authToken = mapping?.auth_token;
                     const origin = mapping?.origin;
-                    const templateId = process.env.WHATSAPP_DEFAULT_TEMPLATE_ID || mapping?.outside_24h_template_id || mapping?.template_id;
 
-                    if (templateId && authToken && origin) {
-                        await sendWhatsAppTemplate(payload.from, { templateId, parameters: { message: messageText.substring(0, 4000) } }, authToken, origin);
-
-                        await supabase
-                            .from("whatsapp_messages")
-                            .insert([{
-                                message_id: `auto_${payload.messageId}_${Date.now()}`,
-                                channel: "whatsapp",
-                                from_number: payload.to,
-                                to_number: payload.from,
-                                received_at: new Date().toISOString(),
-                                content_type: "template",
-                                content_text: `Template:${templateId}`,
-                                sender_name: "AI Assistant",
-                                event_type: "MtMessage",
-                                is_in_24_window: false,
-                                is_responded: false,
-                                auto_respond_sent: true,
-                                raw_payload: { messageId: payload.messageId, isAutoResponse: true, templateId }
-                            }]);
-
-                        // Mark original message as responded
-                        await supabase
-                            .from("whatsapp_messages")
-                            .update({
-                                auto_respond_sent: true,
-                                response_sent_at: new Date().toISOString()
-                            })
-                            .eq("message_id", payload.messageId);
-
-                    } else {
-                        // No template configured - fallback to a short text informing about 24h policy
-                        if (authToken && origin) {
-                            await sendWhatsAppMessage(payload.from, "🎧 We received your voice message but cannot reply outside the 24-hour window. Please type your message or message again when possible.", authToken, origin);
-                        }
-
-                        await supabase
-                            .from("whatsapp_messages")
-                            .insert([{
-                                message_id: `auto_${payload.messageId}_${Date.now()}`,
-                                channel: "whatsapp",
-                                from_number: payload.to,
-                                to_number: payload.from,
-                                received_at: new Date().toISOString(),
-                                content_type: "text",
-                                content_text: "🎧 We received your voice message but cannot reply outside the 24-hour window. Please type your message or message again when possible.",
-                                sender_name: "AI Assistant",
-                                event_type: "MtMessage",
-                                is_in_24_window: false,
-                                is_responded: false,
-                                auto_respond_sent: true,
-                                raw_payload: { messageId: payload.messageId, isAutoResponse: true }
-                            }]);
-
-                        await supabase
-                            .from("whatsapp_messages")
-                            .update({
-                                auto_respond_sent: true,
-                                response_sent_at: new Date().toISOString()
-                            })
-                            .eq("message_id", payload.messageId);
+                    if (authToken && origin) {
+                        await sendWhatsAppMessage(
+                            payload.from,
+                            "Hi! 👋 I received your message. Please give me a moment to process it.",
+                            authToken,
+                            origin
+                        );
                     }
-                } catch (err) {
-                    console.error("Error sending template/fallback for outside-24h message:", err);
+
+                    await supabase
+                        .from("whatsapp_messages")
+                        .update({
+                            auto_respond_sent: true,
+                            response_sent_at: new Date().toISOString()
+                        })
+                        .eq("message_id", payload.messageId);
+                } catch (innerErr) {
+                    console.error("Error sending emergency fallback:", innerErr);
                 }
             }
         } else if (alreadyResponded) {

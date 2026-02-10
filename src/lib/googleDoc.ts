@@ -1,10 +1,7 @@
 import { google } from "googleapis";
+import createGoogleJwt from "./googleAuth";
 
-const auth = new google.auth.JWT({
-  email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-  key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
-  scopes: ["https://www.googleapis.com/auth/documents.readonly"],
-});
+const auth = createGoogleJwt(["https://www.googleapis.com/auth/documents.readonly"]);
 
 export async function readGoogleDoc(docId: string): Promise<string> {
   const docs = google.docs({ version: "v1", auth });
@@ -27,4 +24,13 @@ export async function readGoogleDoc(docId: string): Promise<string> {
   }
 
   return text.trim();
+}
+
+export async function getGoogleDocMetadata(docId: string) {
+  const docs = google.docs({ version: "v1", auth });
+  const res = await docs.documents.get({ documentId: docId });
+  return {
+    title: res.data.title || null,
+    revisionId: (res.data.revisionId as string) || null,
+  };
 }
