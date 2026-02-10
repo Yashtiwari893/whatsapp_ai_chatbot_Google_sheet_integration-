@@ -8,7 +8,7 @@ export async function POST(req: Request) {
     const body = await req.json();
     console.log("Request body:", body);
 
-    const { phone_number, doc_url } = body;
+    const { phone_number, doc_url, doc_name } = body;
 
     if (!phone_number || !doc_url) {
       return NextResponse.json(
@@ -50,6 +50,7 @@ export async function POST(req: Request) {
         {
           phone_number,
           doc_id,
+          doc_name: doc_name || null,
           last_synced_at: null,
           last_chunk_count: 0
         },
