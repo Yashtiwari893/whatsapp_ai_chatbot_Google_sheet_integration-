@@ -98,7 +98,7 @@ export async function generateAutoResponse(
         const { data: historyRows } = await supabase
             .from("whatsapp_messages")
             .select("content_text, event_type, from_number, to_number")
-            .or(`from_number.eq.${fromNumber},to_number.eq.${fromNumber}`)
+            .or(`and(from_number.eq.${fromNumber},to_number.eq.${toNumber}),and(from_number.eq.${toNumber},to_number.eq.${fromNumber})`)
             .order("received_at", { ascending: true })
             .limit(20);
 
