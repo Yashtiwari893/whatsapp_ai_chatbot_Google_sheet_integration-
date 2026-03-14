@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabaseClient";
 import { readGoogleDoc } from "@/lib/googleDoc";
-import { embedText } from "@/lib/embeddings";
+import { embedText, embedBatch } from "@/lib/embeddings";
 import { chunkText } from "@/lib/chunk";
 import { createHash } from "crypto";
 
@@ -205,13 +205,13 @@ export async function POST(req: Request) {
     if (toAdd.length > 0) {
       try {
         const BATCH_SIZE = 50;
-        const BATCH_DELAY_MS = 61000;
+        const BATCH_DELAY_MS = 2000;
 
         for (let i = 0; i < toAdd.length; i += BATCH_SIZE) {
           const batch = toAdd.slice(i, i + BATCH_SIZE);
 
-          // Generate embeddings in parallel for this batch
-          const embeddings = await Promise.all(batch.map(c => embedText(c.content)));
+          // Generate embeddings efficiently for this batch
+          const embeddings = await embedBatch(batch.map(c => c.content));
 
           const chunksToInsert = batch.map((c, idx) => ({
             phone_number,

@@ -42,3 +42,41 @@ export async function embedText(text: string, retries = 3): Promise<number[]> {
 
     throw new Error("Failed to generate embedding after retries");
 }
+
+export async function embedBatch(texts: string[], retries = 3): Promise<number[][]> {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            // Mistral supports an array of strings for inputs
+            const response = await client.embeddings.create({
+                model: "mistral-embed",
+                inputs: texts,
+            });
+
+            if (!response.data || !Array.isArray(response.data)) {
+                throw new Error("Invalid embedding response from API");
+            }
+
+            // Ensure the ordering matches inputs, filter undefined
+            return response.data.map(d => d.embedding || []);
+        } catch (error: unknown) {
+            const isRateLimitError =
+                error &&
+                typeof error === "object" &&
+                "statusCode" in error &&
+                error.statusCode === 429;
+
+            if (isRateLimitError && attempt < retries) {
+                const waitTime = Math.pow(2, attempt) * 1000;
+                console.log(
+                    `Rate limit hit. Retrying in ${waitTime / 1000}s (attempt ${attempt + 1}/${retries})...`
+                );
+                await new Promise((resolve) => setTimeout(resolve, waitTime));
+                continue;
+            }
+
+            throw error;
+        }
+    }
+
+    throw new Error("Failed to generate batch embedding after retries");
+}

@@ -1,7 +1,7 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabaseClient";
 import { readGoogleSheet } from "@/lib/googleSheet";
-import { embedText, embedBatch } from "@/lib/embeddings";
+import { embedText } from "@/lib/embeddings";
 import { createHash } from "crypto";
 
 export const runtime = "nodejs";
@@ -27,7 +27,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // 1️⃣ Get saved sheet mapping for this phone number
+    // 1∩╕ÅΓâú Get saved sheet mapping for this phone number
     let sheetMapping;
     try {
       const { data, error: mappingError } = await supabase
@@ -64,7 +64,7 @@ export async function POST(req: Request) {
 
     console.log(`Reading Google Sheet: ${sheetMapping.sheet_id}`);
 
-    // 2️⃣ Read current Google Sheet data
+    // 2∩╕ÅΓâú Read current Google Sheet data
     let sheetData;
     try {
       sheetData = await readGoogleSheet(sheetMapping.sheet_id, "A1:Z10000"); // Read up to 10k rows
@@ -102,7 +102,7 @@ export async function POST(req: Request) {
       });
     }
 
-    // 3️⃣ Process sheet data - skip header row, create hashes
+    // 3∩╕ÅΓâú Process sheet data - skip header row, create hashes
     const dataRows = sheetData.slice(1); // Skip header row
     const currentSheetHashes = new Set<string>();
 
@@ -134,7 +134,7 @@ export async function POST(req: Request) {
 
     console.log(`Found ${rowData.length} data rows in sheet`);
 
-    // 4️⃣ Get existing chunks for this phone number and source
+    // 4∩╕ÅΓâú Get existing chunks for this phone number and source
     let existingChunks: Array<{ id: string; row_hash: string; content: string }> = [];
     try {
       const { data: existingData, error: existingError } = await supabase
@@ -160,7 +160,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // 5️⃣ Calculate what to add, delete, update
+    // 5∩╕ÅΓâú Calculate what to add, delete, update
     const existingHashes = new Set(existingChunks.map(c => c.row_hash));
     const existingHashToChunk = new Map(existingChunks.map(c => [c.row_hash, c]));
 
@@ -177,7 +177,7 @@ export async function POST(req: Request) {
     let deleted = 0;
     let updated = 0;
 
-    // 6️⃣ Delete old chunks
+    // 6∩╕ÅΓâú Delete old chunks
     if (toDelete.length > 0) {
       try {
         const deleteIds = toDelete.map(chunk => chunk.id);
@@ -205,7 +205,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // 7️⃣ Update changed chunks
+    // 7∩╕ÅΓâú Update changed chunks
     if (toUpdate.length > 0) {
       try {
         for (const row of toUpdate) {
@@ -240,12 +240,12 @@ export async function POST(req: Request) {
       }
     }
 
-    // 8️⃣ Add new chunks
+    // 8∩╕ÅΓâú Add new chunks
     if (toAdd.length > 0) {
       try {
         // Process in batches to avoid rate limits
         const BATCH_SIZE = 50;
-        const BATCH_DELAY_MS = 2000;
+        const BATCH_DELAY_MS = 61000;
 
         for (let i = 0; i < toAdd.length; i += BATCH_SIZE) {
           const batch = toAdd.slice(i, i + BATCH_SIZE);
@@ -254,8 +254,10 @@ export async function POST(req: Request) {
 
           console.log(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} rows)...`);
 
-          // Generate embeddings for batch efficiently
-          const embeddings = await embedBatch(batch.map(row => row.content));
+          // Generate embeddings for batch
+          const embeddings = await Promise.all(
+            batch.map(row => embedText(row.content))
+          );
 
           // Prepare data for insertion
           const chunksToInsert = batch.map((row, idx) => ({
@@ -297,7 +299,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // 9️⃣ Update last_synced_at and last_row_count
+    // 9∩╕ÅΓâú Update last_synced_at and last_row_count
     try {
       const { error: updateError } = await supabase
         .from("google_sheet_mappings")
@@ -316,7 +318,7 @@ export async function POST(req: Request) {
       // Don't fail the request for this
     }
 
-    // 🔟 Return success response
+    // ≡ƒöƒ Return success response
     return NextResponse.json({
       totalRows: rowData.length,
       newRows: added,

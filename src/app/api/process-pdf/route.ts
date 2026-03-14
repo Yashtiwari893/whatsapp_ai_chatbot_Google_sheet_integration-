@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { extractPdfText } from "@/lib/pdf";
 import { chunkText } from "@/lib/chunk";
-import { embedText } from "@/lib/embeddings";
+import { embedText, embedBatch } from "@/lib/embeddings";
 import { supabase } from "@/lib/supabaseClient";
 
 export const runtime = "nodejs";
@@ -67,9 +67,9 @@ export async function POST(req: Request) {
             embedding: number[];
         }[] = [];
 
-        // Process in batches of 55 to stay under rate limit (60/min with buffer)
+        // Process in batches
         const BATCH_SIZE = 55;
-        const BATCH_DELAY_MS = 61000; // Wait 61s between batches
+        const BATCH_DELAY_MS = 2000;
 
         for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
             const batch = chunks.slice(i, i + BATCH_SIZE);
@@ -78,10 +78,8 @@ export async function POST(req: Request) {
 
             console.log(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} chunks)...`);
 
-            // Process batch in parallel
-            const embeddings = await Promise.all(
-                batch.map((chunk) => embedText(chunk))
-            );
+            // Process batch efficiently using array inputs
+            const embeddings = await embedBatch(batch);
 
             // Validate and add to rows
             for (let j = 0; j < batch.length; j++) {

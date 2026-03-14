@@ -1,0 +1,42 @@
+﻿bacee03 - Yash Tiwari, 5 weeks ago : new-2
+ src/app/api/chat/route.ts              |   2 +-
+ src/app/api/save-google-doc/route.ts   |  14 ++-
+ src/app/api/sync-google-doc/route.ts   | 109 +++++++++----------
+ src/app/api/sync-google-sheet/route.ts |   6 +-
+ src/app/api/webhook/whatsapp/route.ts  | 188 ++++++++++-----------------------
+ src/lib/googleAuth.ts                  |  11 ++
+ src/lib/googleDoc.ts                   |  16 ++-
+ src/lib/googleSheet.ts                 |   7 +-
+ src/lib/retrieval.ts                   |  50 ++++-----
+ 9 files changed, 169 insertions(+), 234 deletions(-)
+
+f9062ca - Yash Tiwari, 5 weeks ago : new
+ src/app/api/chat/route.ts              |   2 +-
+ src/app/api/save-google-doc/route.ts   |   3 +-
+ src/app/api/sync-google-doc/route.ts   | 115 +++++++++++++++++++--------------
+ src/app/api/sync-google-sheet/route.ts |   6 +-
+ src/lib/retrieval.ts                   |  50 ++++++++------
+ 5 files changed, 103 insertions(+), 73 deletions(-)
+
+6d2a8db - Yash Tiwari, 5 weeks ago : voice
+ src/app/api/webhook/whatsapp/route.ts | 240 ++++++++++++++++++++++++++++++----
+ test-webhook.js                       |  43 ++++++
+ 2 files changed, 258 insertions(+), 25 deletions(-)
+
+d812668 - Yash Tiwari, 7 weeks ago : doc-implement
+ database-migration.sql                       |  20 +-
+ src/app/api/doc-preview/route.ts             |  69 +++++
+ src/app/api/google-doc-status/route.ts       |  68 +++++
+ src/app/api/save-google-doc/route.ts         |  80 +++++
+ src/app/api/sync-google-doc/route.ts         | 311 +++++++++++++++++++
+ src/app/doc-preview/page.tsx                 | 149 +++++++++
+ src/app/files/page.tsx                       |  34 +++
+ src/components/ui/save-google-doc.tsx        |  71 +++++
+ src/components/ui/sync-google-doc-button.tsx | 131 ++++++++
+ src/lib/autoResponder.ts                     | 434 ++++++++-------------------
+ src/lib/googleDoc.ts                         |  30 ++
+ 11 files changed, 1079 insertions(+), 318 deletions(-)
+
+aa85236 - Yash Tiwari, 7 weeks ago : 90
+ src/app/api/stt/mistral/route.ts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
