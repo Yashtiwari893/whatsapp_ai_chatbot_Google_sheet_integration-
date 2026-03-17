@@ -167,12 +167,31 @@ export async function generateAutoResponse(
 
         console.log(`Sending to LLM with ${messages.length} total messages`);
 
-        // 10. Generate response with Triple Fallback (Groq 70B -> Groq 8B -> Gemini)
+        // 10. Generate response with Priority Swap (Gemini Primary -> Groq Fallback)
         let response = "";
         let attemptStartTime = Date.now();
 
+        async function tryGemini() {
+            if (!genAI) throw new Error("Gemini API key not configured");
+            console.log("Attempting Gemini 1.5 Flash (Primary)...");
+            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+            
+            // Format messages for Gemini
+            const geminiMessages = messages.map(m => ({
+                role: m.role === "system" ? "user" : (m.role === "user" ? "user" : "model"),
+                parts: [{ text: m.content }]
+            }));
+
+            const result = await model.generateContent({
+                contents: geminiMessages.slice(1), 
+                systemInstruction: messages[0].content,
+            });
+            
+            return result.response.text();
+        }
+
         async function tryGroq(model: string) {
-            console.log(`Attempting Groq ${model}...`);
+            console.log(`Attempting Groq ${model} (Fallback)...`);
             const completion = await groq.chat.completions.create({
                 model: model,
                 messages,
@@ -183,42 +202,26 @@ export async function generateAutoResponse(
         }
 
         try {
-            response = await tryGroq("llama-3.3-70b-versatile");
-            console.log(`Groq 70B success in ${Date.now() - attemptStartTime}ms`);
-        } catch (groq70Error: any) {
-            console.warn("Groq 70B failed, trying Groq 8B (Higher Limit)...", groq70Error.message);
+            // Priority 1: Gemini (Highest Limit)
+            response = await tryGemini();
+            console.log(`Gemini success in ${Date.now() - attemptStartTime}ms`);
+        } catch (geminiError: any) {
+            console.warn("Gemini failed, trying Groq 70B...", geminiError.message);
             try {
+                // Priority 2: Groq 70B
                 attemptStartTime = Date.now();
-                // 8B has much higher rate limits and is very fast
-                response = await tryGroq("llama-3.1-8b-instant");
-                console.log(`Groq 8B success in ${Date.now() - attemptStartTime}ms`);
-            } catch (groq8Error: any) {
-                console.error("Groq 8B also failed, trying Gemini (Google Fallback)...", groq8Error.message);
-                
-                if (genAI) {
-                    try {
-                        attemptStartTime = Date.now();
-                        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-                        
-                        // Format messages for Gemini
-                        const geminiMessages = messages.map(m => ({
-                            role: m.role === "system" ? "user" : (m.role === "user" ? "user" : "model"),
-                            parts: [{ text: m.content }]
-                        }));
-
-                        const result = await model.generateContent({
-                            contents: geminiMessages.slice(1), 
-                            systemInstruction: messages[0].content,
-                        });
-                        
-                        response = result.response.text();
-                        console.log(`Gemini fallback success in ${Date.now() - attemptStartTime}ms`);
-                    } catch (geminiError: any) {
-                        console.error("Gemini failed too:", geminiError.message);
-                        return { success: false, error: "All AI models failed (Groq 70B, 8B, and Gemini)" };
-                    }
-                } else {
-                    return { success: false, error: "Both Groq models failed and Gemini API key not configured" };
+                response = await tryGroq("llama-3.3-70b-versatile");
+                console.log(`Groq 70B success in ${Date.now() - attemptStartTime}ms`);
+            } catch (groq70Error: any) {
+                console.error("Groq 70B failed, trying Groq 8B...", groq70Error.message);
+                try {
+                    // Priority 3: Groq 8B
+                    attemptStartTime = Date.now();
+                    response = await tryGroq("llama-3.1-8b-instant");
+                    console.log(`Groq 8B success in ${Date.now() - attemptStartTime}ms`);
+                } catch (groq8Error: any) {
+                    console.error("All AI models failed!");
+                    return { success: false, error: "AI service unavailable (Gemini & Groq failed)" };
                 }
             }
         }
