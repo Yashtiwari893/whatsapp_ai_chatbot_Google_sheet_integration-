@@ -4,10 +4,13 @@ import { retrieveRelevantChunksForPhoneNumber } from "./retrieval";
 import { getFilesForPhoneNumber } from "./phoneMapping";
 import { sendWhatsAppMessage } from "./whatsappSender";
 import Groq from "groq-sdk";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const groq = new Groq({
     apiKey: process.env.GROQ_API_KEY!,
 });
+
+const genAI = process.env.GEMINI_API_KEY ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY) : null;
 
 export type AutoResponseResult = {
     success: boolean;
@@ -28,8 +31,26 @@ export async function generateAutoResponse(
     messageId: string
 ): Promise<AutoResponseResult> {
     try {
-        // 1. Get all documents mapped to this business number
-        const fileIds = await getFilesForPhoneNumber(toNumber);
+        console.log(`--- Starting Fast Auto-Response for ${toNumber} ---`);
+        const startTime = Date.now();
+
+        // 1. Parallelize initial data fetching (DB calls + Embedding)
+        // These don't depend on each other, so we run them all at once.
+        const [fileIds, mappingResult, queryEmbedding, historyResult] = await Promise.all([
+            getFilesForPhoneNumber(toNumber),
+            supabase
+                .from("phone_document_mapping")
+                .select("system_prompt, auth_token, origin")
+                .eq("phone_number", toNumber)
+                .single(),
+            embedText(messageText),
+            supabase
+                .from("whatsapp_messages")
+                .select("content_text, event_type, from_number, to_number")
+                .or(`and(from_number.eq.${fromNumber},to_number.eq.${toNumber}),and(from_number.eq.${toNumber},to_number.eq.${fromNumber})`)
+                .order("received_at", { ascending: true })
+                .limit(20)
+        ]);
 
         if (fileIds.length === 0) {
             console.log(`No documents mapped for business number: ${toNumber}`);
@@ -40,48 +61,35 @@ export async function generateAutoResponse(
             };
         }
 
-        console.log(`Found ${fileIds.length} document(s) for business number ${toNumber}`);
-
-        // 2. Fetch phone mapping details including custom system prompt and credentials
-        const { data: phoneMappings, error: mappingError } = await supabase
-            .from("phone_document_mapping")
-            .select("system_prompt, auth_token, origin")
-            .eq("phone_number", toNumber);
-
-        if (mappingError || !phoneMappings || phoneMappings.length === 0) {
-            console.error("Error fetching phone mappings:", mappingError);
+        const phoneMapping = mappingResult.data;
+        if (mappingResult.error || !phoneMapping) {
+            console.error("Error fetching phone mapping:", mappingResult.error);
             return {
                 success: false,
                 error: "Failed to fetch phone mapping details",
             };
         }
 
-        const customSystemPrompt = phoneMappings[0].system_prompt;
-        const auth_token = phoneMappings[0].auth_token;
-        const origin = phoneMappings[0].origin;
-
-        console.log(`Retrieved mappings for phone ${toNumber}`);
-        console.log(`Has custom system prompt: ${!!customSystemPrompt}`);
+        const customSystemPrompt = phoneMapping.system_prompt;
+        const auth_token = phoneMapping.auth_token;
+        const origin = phoneMapping.origin;
 
         if (!auth_token || !origin) {
             console.error("No credentials found for phone number");
             return {
                 success: false,
-                error: "No WhatsApp API credentials found. Please set credentials in the Configuration tab.",
+                error: "No WhatsApp API credentials found",
             };
         }
-
-        // 3. Embed the user query for RAG
-        const queryEmbedding = await embedText(messageText);
 
         if (!queryEmbedding) {
             return {
                 success: false,
-                error: "Failed to generate embedding for message",
+                error: "Failed to generate embedding",
             };
         }
 
-        // 4. Retrieve relevant chunks from documents
+        // 2. Vector Search (Depends on embedding)
         const matches = await retrieveRelevantChunksForPhoneNumber(
             queryEmbedding,
             toNumber,
@@ -92,28 +100,19 @@ export async function generateAutoResponse(
             ? matches.map((m) => m.chunk).join("\n\n")
             : "";
 
-        console.log(`Retrieved ${matches.length} relevant chunks`);
-
-        // 5. Get conversation history
-        const { data: historyRows } = await supabase
-            .from("whatsapp_messages")
-            .select("content_text, event_type, from_number, to_number")
-            .or(`and(from_number.eq.${fromNumber},to_number.eq.${toNumber}),and(from_number.eq.${toNumber},to_number.eq.${fromNumber})`)
-            .order("received_at", { ascending: true })
-            .limit(20);
-
-        const history = (historyRows || [])
+        // 3. Process history
+        const historyRows = historyResult.data || [];
+        const history = historyRows
             .filter(m => m.content_text && (m.event_type === "MoMessage" || m.event_type === "MtMessage"))
             .map(m => ({
                 role: m.event_type === "MoMessage" ? "user" as const : "assistant" as const,
                 content: m.content_text
             }));
 
-        console.log(`Loaded ${history.length} messages from conversation history`);
-
-        // 6. Detect language from user's message
+        // 4. Detect language
         const detectedLanguage = detectLanguage(messageText, history);
-        console.log(`Detected language: ${detectedLanguage}`);
+        
+        console.log(`Pre-processing took ${Date.now() - startTime}ms`);
 
         // 7. Build the system prompt
         let systemPrompt: string;
@@ -168,24 +167,49 @@ export async function generateAutoResponse(
 
         console.log(`Sending to LLM with ${messages.length} total messages`);
 
-        // 10. Generate response using Groq
-        const completion = await groq.chat.completions.create({
-            model: "llama-3.3-70b-versatile",
-            messages,
-            temperature: 0.7,
-            max_tokens: 300,
-        });
+        // 10. Generate response with Fallback (Groq -> Gemini)
+        let response = "";
+        let attemptStartTime = Date.now();
 
-        const response = completion.choices[0].message.content;
+        try {
+            console.log("Attempting Groq Llama-3 (Primary)...");
+            const completion = await groq.chat.completions.create({
+                model: "llama-3.3-70b-versatile",
+                messages,
+                temperature: 0.7,
+                max_tokens: 300,
+            });
+            response = completion.choices[0].message.content || "";
+            console.log(`Groq success in ${Date.now() - attemptStartTime}ms`);
+        } catch (groqError: any) {
+            console.error("Groq failed, trying Gemini (Fallback)...", groqError.message);
+            
+            if (genAI) {
+                try {
+                    attemptStartTime = Date.now();
+                    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+                    
+                    // Format messages for Gemini
+                    const geminiMessages = messages.map(m => ({
+                        role: m.role === "system" ? "user" : (m.role === "user" ? "user" : "model"),
+                        parts: [{ text: m.content }]
+                    }));
 
-        if (!response) {
-            return {
-                success: false,
-                error: "No response generated from LLM",
-            };
+                    const result = await model.generateContent({
+                        contents: geminiMessages.slice(1), // Gemini uses system instruction separately or just within content
+                        systemInstruction: messages[0].content, // Using the first message as system instruction
+                    });
+                    
+                    response = result.response.text();
+                    console.log(`Gemini fallback success in ${Date.now() - attemptStartTime}ms`);
+                } catch (geminiError: any) {
+                    console.error("Gemini also failed:", geminiError.message);
+                    return { success: false, error: "All AI models failed" };
+                }
+            } else {
+                return { success: false, error: "Groq failed and Gemini API key not configured" };
+            }
         }
-
-        console.log(`Generated response: ${response.substring(0, 100)}...`);
 
         // 11. Send the response via WhatsApp
         const sendResult = await sendWhatsAppMessage(fromNumber, response, auth_token, origin);
