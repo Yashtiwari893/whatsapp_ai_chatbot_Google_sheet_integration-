@@ -211,52 +211,71 @@ export async function generateAutoResponse(
             }
         }
 
-        // 11. Send the response via WhatsApp
-        const sendResult = await sendWhatsAppMessage(fromNumber, response, auth_token, origin);
+        // 11. Send the response via WhatsApp (Splitting into multiple messages if long)
+        // We split by double newlines or single newlines if paragraphs are long
+        const messageChunks = response
+            .split(/\n\n+/)
+            .map(chunk => chunk.trim())
+            .filter(chunk => chunk.length > 0);
 
-        if (!sendResult.success) {
-            console.error("Failed to send WhatsApp message:", sendResult.error);
+        console.log(`Splitting response into ${messageChunks.length} chunks`);
+
+        let allSent = true;
+        let lastError = "";
+
+        for (let i = 0; i < messageChunks.length; i++) {
+            const chunk = messageChunks[i];
             
-            await supabase
-                .from("whatsapp_messages")
-                .update({
-                    auto_respond_sent: false,
-                    response_sent_at: new Date().toISOString(),
-                })
-                .eq("message_id", messageId);
+            // Send to WhatsApp
+            const sendResult = await sendWhatsAppMessage(fromNumber, chunk, auth_token, origin);
+            
+            if (sendResult.success) {
+                // Store each chunk in the database
+                const responseMessageId = `auto_${messageId}_${Date.now()}_${i}`;
+                await supabase
+                    .from("whatsapp_messages")
+                    .insert([
+                        {
+                            message_id: responseMessageId,
+                            channel: "whatsapp",
+                            from_number: toNumber,
+                            to_number: fromNumber,
+                            received_at: new Date().toISOString(),
+                            content_type: "text",
+                            content_text: chunk,
+                            sender_name: "AI Assistant",
+                            event_type: "MtMessage",
+                            is_in_24_window: true,
+                            is_responded: false,
+                            auto_respond_sent: false,
+                            raw_payload: {
+                                messageId: responseMessageId,
+                                isAutoResponse: true,
+                                chunkIndex: i
+                            },
+                        },
+                    ]);
+                
+                // Add a small delay between messages to simulate typing (except for the last message)
+                if (i < messageChunks.length - 1) {
+                    const delay = Math.min(1500, 800 + (chunk.length * 5)); // Dynamic delay based on length
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            } else {
+                allSent = false;
+                lastError = sendResult.error || "Unknown error";
+                console.error(`Failed to send chunk ${i}:`, lastError);
+            }
+        }
 
+        if (!allSent && messageChunks.length > 0) {
             return {
                 success: false,
                 response,
                 sent: false,
-                error: `Generated response but failed to send: ${sendResult.error}`,
+                error: `Failed to send some/all chunks: ${lastError}`,
             };
         }
-
-        // 12. Store the AI response in database
-        const responseMessageId = `auto_${messageId}_${Date.now()}`;
-        await supabase
-            .from("whatsapp_messages")
-            .insert([
-                {
-                    message_id: responseMessageId,
-                    channel: "whatsapp",
-                    from_number: toNumber,
-                    to_number: fromNumber,
-                    received_at: new Date().toISOString(),
-                    content_type: "text",
-                    content_text: response,
-                    sender_name: "AI Assistant",
-                    event_type: "MtMessage",
-                    is_in_24_window: true,
-                    is_responded: false,
-                    auto_respond_sent: false,
-                    raw_payload: {
-                        messageId: responseMessageId,
-                        isAutoResponse: true
-                    },
-                },
-            ]);
 
         // 13. Mark original message as responded
         await supabase
@@ -267,7 +286,7 @@ export async function generateAutoResponse(
             })
             .eq("message_id", messageId);
 
-        console.log(`✅ Auto-response sent successfully to ${fromNumber}`);
+        console.log(`✅ Auto-response chunks sent successfully to ${fromNumber}`);
 
         return {
             success: true,
@@ -298,7 +317,7 @@ function detectLanguage(text: string, history: Array<{role: string, content: str
 
     // Hindi detection
     const hindiChars = /[अ-ह्]/;
-    const hindiWords = /\b(है|हूँ|हो|कर|जा|आ|था|थी|थे|करना|जाना|आना|खाना|पीना|सोना|बैठना|खड़ा|रहना|क्या|कौन|कब|कहाँ|क्यों|कैसे|हाँ|नहीं|थोड़ा|बहुत|अच्छा|बुरा|बड़ा|छोटा|मैं|तू|वह|हम|तुम|वे|यह|ये|हेलो|नमस्ते|धन्यवाद)\b/;
+    const hindiWords = /\b(है|हूँ|हो|कर|जा|આ|था|थी|थे|करना|जाना|आना|खाना|पीना|सोना|बैठना|खड़ा|रहना|क्या|कौन|कब|कहाँ|क्यों|कैसे|हाँ|नहीं|थोड़ा|बहुत|अच्छा|बुरा|बड़ा|छोटा|मैं|तू|वह|हम|तुम|वे|यह|ये|हेलो|नमस्ते|धन्यवाद)\b/;
     if (hindiChars.test(text) || hindiWords.test(lowerText)) {
         return "hindi";
     }
@@ -326,4 +345,123 @@ function detectLanguage(text: string, history: Array<{role: string, content: str
 
     // Default
     return "english";
+}
+
+/**
+ * Generate a gentle reminder/follow-up message
+ */
+export async function generateReminderResponse(
+    fromNumber: string, // The user's number
+    toNumber: string,   // The business number
+): Promise<AutoResponseResult> {
+    try {
+        console.log(`--- Generating Reminder for ${fromNumber} (via ${toNumber}) ---`);
+        
+        // 1. Fetch mapping and history
+        const [mappingResult, historyResult] = await Promise.all([
+            supabase
+                .from("phone_document_mapping")
+                .select("system_prompt, auth_token, origin")
+                .eq("phone_number", toNumber)
+                .single(),
+            supabase
+                .from("whatsapp_messages")
+                .select("content_text, event_type, from_number, to_number, raw_payload")
+                .or(`and(from_number.eq.${fromNumber},to_number.eq.${toNumber}),and(from_number.eq.${toNumber},to_number.eq.${fromNumber})`)
+                .order("received_at", { ascending: true })
+        ]);
+
+        const phoneMapping = mappingResult.data;
+        if (mappingResult.error || !phoneMapping) return { success: false, error: "Mapping not found" };
+
+        const historyRows = (historyResult.data || []).slice(-10);
+        const history = historyRows
+            .filter(m => m.content_text && (m.event_type === "MoMessage" || m.event_type === "MtMessage"))
+            .map(m => ({
+                role: m.event_type === "MoMessage" ? "user" as const : "assistant" as const,
+                content: m.content_text
+            }));
+
+        if (history.length === 0) return { success: false, error: "No history found" };
+
+        // Check if the very last message was already a reminder
+        const latestMsg = historyRows[historyRows.length - 1];
+        if (latestMsg?.raw_payload?.isReminder) {
+            console.log("Last message was already a reminder. Skipping.");
+            return { success: false, error: "Reminder already sent" };
+        }
+
+        const lastAiMessage = history.filter(h => h.role === "assistant").pop()?.content || "";
+        const detectedLanguage = detectLanguage(lastAiMessage, history);
+
+        // 2. Build reminder prompt
+        const systemPrompt = 
+            `${phoneMapping.system_prompt || "You are a helpful assistant."}\n\n` +
+            `=== REMINDER TASK ===\n` +
+            `The user hasn't responded for 30 minutes. Your task is to send a VERY SHORT, gentle nudge to re-engage them.\n` +
+            `- Be polite, non-pushy, and human-like.\n` +
+            `- Reference the last topic briefly.\n` +
+            `- Keep it to 1-2 lines MAX.\n` +
+            `- Reply in ${detectedLanguage}.\n` +
+            `- Don't sound like a bot.\n` +
+            `- Do NOT use markdown bold/bullets.\n`;
+
+        const messages = [
+            { role: "system" as const, content: systemPrompt },
+            ...history.slice(-5),
+            { role: "user" as const, content: "[SYSTEM: The user has been silent for 30 mins. Send a short, natural follow-up in their language to check if they have more questions or want to proceed.]" }
+        ];
+
+        // 3. Generate with Fallback
+        let response = "";
+        try {
+            const completion = await groq.chat.completions.create({
+                model: "llama-3.3-70b-versatile",
+                messages,
+                temperature: 0.8,
+                max_tokens: 150,
+            });
+            response = completion.choices[0].message.content || "";
+        } catch (e: any) {
+            console.error("Groq reminder failed:", e.message);
+            if (genAI) {
+                const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+                const result = await model.generateContent({
+                    contents: messages.map(m => ({
+                        role: m.role === "system" ? "user" : (m.role === "user" ? "user" : "model"),
+                        parts: [{ text: m.content }]
+                    })).slice(1),
+                    systemInstruction: messages[0].content,
+                });
+                response = result.response.text();
+            }
+        }
+
+        if (!response) return { success: false, error: "No response generated" };
+
+        // 4. Send to WhatsApp
+        const sendResult = await sendWhatsAppMessage(fromNumber, response, phoneMapping.auth_token, phoneMapping.origin);
+
+        if (sendResult.success) {
+            const responseMessageId = `reminder_${fromNumber}_${Date.now()}`;
+            await supabase.from("whatsapp_messages").insert([{
+                message_id: responseMessageId,
+                channel: "whatsapp",
+                from_number: toNumber,
+                to_number: fromNumber,
+                received_at: new Date().toISOString(),
+                content_type: "text",
+                content_text: response,
+                sender_name: "AI Assistant",
+                event_type: "MtMessage",
+                raw_payload: { isReminder: true }
+            }]);
+            return { success: true, response, sent: true };
+        }
+
+        return { success: false, error: sendResult.error };
+    } catch (error) {
+        console.error("Reminder error:", error);
+        return { success: false, error: "Internal error" };
+    }
 }
