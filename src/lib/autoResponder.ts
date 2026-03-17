@@ -167,47 +167,59 @@ export async function generateAutoResponse(
 
         console.log(`Sending to LLM with ${messages.length} total messages`);
 
-        // 10. Generate response with Fallback (Groq -> Gemini)
+        // 10. Generate response with Triple Fallback (Groq 70B -> Groq 8B -> Gemini)
         let response = "";
         let attemptStartTime = Date.now();
 
-        try {
-            console.log("Attempting Groq Llama-3 (Primary)...");
+        async function tryGroq(model: string) {
+            console.log(`Attempting Groq ${model}...`);
             const completion = await groq.chat.completions.create({
-                model: "llama-3.3-70b-versatile",
+                model: model,
                 messages,
                 temperature: 0.7,
                 max_tokens: 300,
             });
-            response = completion.choices[0].message.content || "";
-            console.log(`Groq success in ${Date.now() - attemptStartTime}ms`);
-        } catch (groqError: any) {
-            console.error("Groq failed, trying Gemini (Fallback)...", groqError.message);
-            
-            if (genAI) {
-                try {
-                    attemptStartTime = Date.now();
-                    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-                    
-                    // Format messages for Gemini
-                    const geminiMessages = messages.map(m => ({
-                        role: m.role === "system" ? "user" : (m.role === "user" ? "user" : "model"),
-                        parts: [{ text: m.content }]
-                    }));
+            return completion.choices[0].message.content || "";
+        }
 
-                    const result = await model.generateContent({
-                        contents: geminiMessages.slice(1), // Gemini uses system instruction separately or just within content
-                        systemInstruction: messages[0].content, // Using the first message as system instruction
-                    });
-                    
-                    response = result.response.text();
-                    console.log(`Gemini fallback success in ${Date.now() - attemptStartTime}ms`);
-                } catch (geminiError: any) {
-                    console.error("Gemini also failed:", geminiError.message);
-                    return { success: false, error: "All AI models failed" };
+        try {
+            response = await tryGroq("llama-3.3-70b-versatile");
+            console.log(`Groq 70B success in ${Date.now() - attemptStartTime}ms`);
+        } catch (groq70Error: any) {
+            console.warn("Groq 70B failed, trying Groq 8B (Higher Limit)...", groq70Error.message);
+            try {
+                attemptStartTime = Date.now();
+                // 8B has much higher rate limits and is very fast
+                response = await tryGroq("llama-3.1-8b-instant");
+                console.log(`Groq 8B success in ${Date.now() - attemptStartTime}ms`);
+            } catch (groq8Error: any) {
+                console.error("Groq 8B also failed, trying Gemini (Google Fallback)...", groq8Error.message);
+                
+                if (genAI) {
+                    try {
+                        attemptStartTime = Date.now();
+                        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+                        
+                        // Format messages for Gemini
+                        const geminiMessages = messages.map(m => ({
+                            role: m.role === "system" ? "user" : (m.role === "user" ? "user" : "model"),
+                            parts: [{ text: m.content }]
+                        }));
+
+                        const result = await model.generateContent({
+                            contents: geminiMessages.slice(1), 
+                            systemInstruction: messages[0].content,
+                        });
+                        
+                        response = result.response.text();
+                        console.log(`Gemini fallback success in ${Date.now() - attemptStartTime}ms`);
+                    } catch (geminiError: any) {
+                        console.error("Gemini failed too:", geminiError.message);
+                        return { success: false, error: "All AI models failed (Groq 70B, 8B, and Gemini)" };
+                    }
+                } else {
+                    return { success: false, error: "Both Groq models failed and Gemini API key not configured" };
                 }
-            } else {
-                return { success: false, error: "Groq failed and Gemini API key not configured" };
             }
         }
 
