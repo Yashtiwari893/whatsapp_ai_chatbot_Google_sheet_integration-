@@ -170,6 +170,7 @@ export async function POST(req: NextRequest) {
 
         // ── Sanitize + attach guardrails ──────────────────────────────────────
         const cleanPersona = sanitizeSystemPrompt(generatedPersona);
+        
 
         /**
          * Final system prompt structure:
