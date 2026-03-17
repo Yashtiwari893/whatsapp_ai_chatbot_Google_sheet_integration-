@@ -8,6 +8,13 @@ export async function GET(req: NextRequest) {
     try {
         console.log("--- Running Reminder Cron Job ---");
 
+        // Security Check: Only allow requests with the correct Bearer token
+        const authHeader = req.headers.get("authorization");
+        if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+            console.error("Unauthorized cron attempt");
+            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        }
+
         // 1. Find the latest message for every distinct conversation in the last 2 hours
         // We only care about conversations where the last message was from the assistant (MtMessage)
         const TWO_HOURS_AGO = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
