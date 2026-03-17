@@ -21,6 +21,13 @@ export async function POST(req: Request) {
         const origin = form.get("origin") as string | null;
         const devMode = form.get("dev_mode") === "true";
         const processingMode = form.get("processing_mode") as "ocr" | "transcribe";
+        const customGeminiKey = form.get("gemini_api_key") as string | null;
+        const customGroqKey = form.get("groq_api_key") as string | null;
+        const customMistralKey = form.get("mistral_api_key") as string | null;
+
+        const effectiveMistralKey = (customMistralKey && customMistralKey.trim().length > 0) 
+            ? customMistralKey.trim() 
+            : mistralApiKey;
 
         if (!file) {
             return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
@@ -52,9 +59,9 @@ export async function POST(req: Request) {
             console.log("Processing image file:", fileName);
             detectedFileType = "image";
 
-            if (!mistralApiKey) {
+            if (!effectiveMistralKey) {
                 return NextResponse.json({
-                    error: "Mistral API key is not configured for image processing"
+                    error: "Mistral API key (custom or default) is not configured for image processing"
                 }, { status: 500 });
             }
 
@@ -63,7 +70,7 @@ export async function POST(req: Request) {
 
             if (processingMode === "ocr") {
                 // Use Mistral OCR API
-                const client = new Mistral({ apiKey: mistralApiKey });
+                const client = new Mistral({ apiKey: effectiveMistralKey });
 
                 const ocrResponse = await client.ocr.process({
                     model: "mistral-ocr-latest",
@@ -97,7 +104,7 @@ export async function POST(req: Request) {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${mistralApiKey}`,
+                        'Authorization': `Bearer ${effectiveMistralKey}`,
                     },
                     body: JSON.stringify({
                         model: "pixtral-12b-2409",
@@ -179,7 +186,7 @@ export async function POST(req: Request) {
             console.log(`Processing batch ${batchNumber}/${totalBatches} (${batch.length} chunks)...`);
 
             // Process batch efficiently using array inputs
-            const embeddings = await embedBatch(batch);
+            const embeddings = await embedBatch(batch, 3, effectiveMistralKey);
 
             // Validate and add to rows
             for (let j = 0; j < batch.length; j++) {
@@ -230,6 +237,9 @@ export async function POST(req: Request) {
                     intent: intent || placeholderMapping.intent,
                     auth_token: authToken,
                     origin: origin,
+                    gemini_api_key: customGeminiKey || placeholderMapping.gemini_api_key,
+                    groq_api_key: customGroqKey || placeholderMapping.groq_api_key,
+                    mistral_api_key: customMistralKey || placeholderMapping.mistral_api_key,
                 })
                 .eq("id", placeholderMapping.id);
 
@@ -247,6 +257,9 @@ export async function POST(req: Request) {
                     system_prompt: existingMappings[0].system_prompt,
                     auth_token: authToken,
                     origin: origin,
+                    gemini_api_key: customGeminiKey || null,
+                    groq_api_key: customGroqKey || null,
+                    mistral_api_key: customMistralKey || null,
                 });
 
             if (mappingError) {
@@ -262,6 +275,9 @@ export async function POST(req: Request) {
                     intent: intent || null,
                     auth_token: authToken,
                     origin: origin,
+                    gemini_api_key: customGeminiKey || null,
+                    groq_api_key: customGroqKey || null,
+                    mistral_api_key: customMistralKey || null,
                 });
 
             if (mappingError) {

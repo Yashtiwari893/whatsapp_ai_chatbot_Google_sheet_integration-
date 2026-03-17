@@ -12,6 +12,9 @@ export async function GET() {
                 system_prompt,
                 auth_token,
                 origin,
+                gemini_api_key,
+                groq_api_key,
+                mistral_api_key,
                 file_id,
                 rag_files (
                     id,
@@ -55,6 +58,9 @@ export async function GET() {
                     system_prompt: mapping.system_prompt,
                     auth_token: mapping.auth_token || "",
                     origin: mapping.origin || "",
+                    gemini_api_key: mapping.gemini_api_key || null,
+                    groq_api_key: mapping.groq_api_key || null,
+                    mistral_api_key: mapping.mistral_api_key || null,
                     files: [],
                 };
             }

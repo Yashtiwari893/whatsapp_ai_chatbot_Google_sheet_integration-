@@ -1,10 +1,18 @@
 import { Mistral } from "@mistralai/mistralai";
 
-const client = new Mistral({
+const defaultClient = new Mistral({
     apiKey: process.env.MISTRAL_API_KEY!,
 });
 
-export async function embedText(text: string, retries = 3): Promise<number[]> {
+function getClient(customKey?: string | null) {
+    if (customKey && customKey.trim().length > 0) {
+        return new Mistral({ apiKey: customKey.trim() });
+    }
+    return defaultClient;
+}
+
+export async function embedText(text: string, retries = 3, customKey?: string | null): Promise<number[]> {
+    const client = getClient(customKey);
     for (let attempt = 0; attempt <= retries; attempt++) {
         try {
             const response = await client.embeddings.create({
@@ -43,7 +51,8 @@ export async function embedText(text: string, retries = 3): Promise<number[]> {
     throw new Error("Failed to generate embedding after retries");
 }
 
-export async function embedBatch(texts: string[], retries = 3): Promise<number[][]> {
+export async function embedBatch(texts: string[], retries = 3, customKey?: string | null): Promise<number[][]> {
+    const client = getClient(customKey);
     for (let attempt = 0; attempt <= retries; attempt++) {
         try {
             // Mistral supports an array of strings for inputs

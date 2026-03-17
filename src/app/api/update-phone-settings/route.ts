@@ -4,7 +4,7 @@ import { supabase } from "@/lib/supabaseClient";
 export async function POST(req: NextRequest) {
     try {
         const body = await req.json();
-        const { phone_number, intent, system_prompt, auth_token, origin } = body;
+        const { phone_number, intent, system_prompt, auth_token, origin, gemini_api_key, groq_api_key, mistral_api_key } = body;
 
         if (!phone_number) {
             return NextResponse.json(
@@ -34,6 +34,9 @@ export async function POST(req: NextRequest) {
         if (system_prompt !== undefined) updateData.system_prompt = system_prompt;
         if (auth_token !== undefined) updateData.auth_token = auth_token;
         if (origin !== undefined) updateData.origin = origin;
+        if (gemini_api_key !== undefined) updateData.gemini_api_key = gemini_api_key;
+        if (groq_api_key !== undefined) updateData.groq_api_key = groq_api_key;
+        if (mistral_api_key !== undefined) updateData.mistral_api_key = mistral_api_key;
 
         const { error: updateMappingError } = await supabase
             .from("phone_document_mapping")

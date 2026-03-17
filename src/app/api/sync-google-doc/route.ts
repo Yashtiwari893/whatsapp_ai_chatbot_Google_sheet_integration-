@@ -56,6 +56,16 @@ export async function POST(req: Request) {
       );
     }
 
+    // ⭐ NEW: Fetch phone mapping to get custom API keys
+    const { data: phoneMapping } = await supabase
+      .from("phone_document_mapping")
+      .select("mistral_api_key")
+      .eq("phone_number", phone_number)
+      .limit(1)
+      .single();
+
+    const mistralKey = phoneMapping?.mistral_api_key;
+
     if (!docMapping.doc_id) {
       return NextResponse.json(
         { error: "Invalid doc mapping - missing doc_id" },
@@ -211,7 +221,7 @@ export async function POST(req: Request) {
           const batch = toAdd.slice(i, i + BATCH_SIZE);
 
           // Generate embeddings efficiently for this batch
-          const embeddings = await embedBatch(batch.map(c => c.content));
+          const embeddings = await embedBatch(batch.map(c => c.content), 3, mistralKey);
 
           const chunksToInsert = batch.map((c, idx) => ({
             phone_number,
@@ -254,7 +264,7 @@ export async function POST(req: Request) {
     if (toUpdate.length > 0) {
       try {
         for (const chunk of toUpdate) {
-          const embedding = await embedText(chunk.content);
+          const embedding = await embedText(chunk.content, 3, mistralKey);
 
           const existing = existingHashToChunk.get(chunk.hash);
           if (existing) {

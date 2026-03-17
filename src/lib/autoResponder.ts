@@ -34,16 +34,26 @@ export async function generateAutoResponse(
         console.log(`--- Starting Fast Auto-Response for ${toNumber} ---`);
         const startTime = Date.now();
 
-        // 1. Parallelize initial data fetching (DB calls + Embedding)
-        // These don't depend on each other, so we run them all at once.
-        const [fileIds, mappingResult, queryEmbedding, historyResult] = await Promise.all([
+        // 1. Fetch mapping first (needed for custom API keys)
+        const mappingResult = await supabase
+            .from("phone_document_mapping")
+            .select("system_prompt, auth_token, origin, gemini_api_key, groq_api_key, mistral_api_key")
+            .eq("phone_number", toNumber)
+            .single();
+
+        const phoneMapping = mappingResult.data;
+        if (mappingResult.error || !phoneMapping) {
+            console.error("Error fetching phone mapping:", mappingResult.error);
+            return {
+                success: false,
+                error: "Failed to fetch phone mapping details or number not found",
+            };
+        }
+
+        // 2. Parallelize remaining data fetching using custom keys if available
+        const [fileIds, queryEmbedding, historyResult] = await Promise.all([
             getFilesForPhoneNumber(toNumber),
-            supabase
-                .from("phone_document_mapping")
-                .select("system_prompt, auth_token, origin")
-                .eq("phone_number", toNumber)
-                .single(),
-            embedText(messageText),
+            embedText(messageText, 3, phoneMapping.mistral_api_key),
             supabase
                 .from("whatsapp_messages")
                 .select("content_text, event_type, from_number, to_number")
@@ -61,14 +71,6 @@ export async function generateAutoResponse(
             };
         }
 
-        const phoneMapping = mappingResult.data;
-        if (mappingResult.error || !phoneMapping) {
-            console.error("Error fetching phone mapping:", mappingResult.error);
-            return {
-                success: false,
-                error: "Failed to fetch phone mapping details",
-            };
-        }
 
         const customSystemPrompt = phoneMapping.system_prompt;
         const auth_token = phoneMapping.auth_token;
@@ -171,10 +173,15 @@ export async function generateAutoResponse(
         let response = "";
         let attemptStartTime = Date.now();
 
+        // Use custom keys or default env vars
+        const geminiKey = phoneMapping.gemini_api_key || process.env.GEMINI_API_KEY;
+        const groqKey = phoneMapping.groq_api_key || process.env.GROQ_API_KEY;
+
         async function tryGemini() {
-            if (!genAI) throw new Error("Gemini API key not configured");
+            if (!geminiKey) throw new Error("Gemini API key not configured");
             console.log("Attempting Gemini 1.5 Flash (Primary)...");
-            const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+            const localGenAI = new GoogleGenerativeAI(geminiKey);
+            const model = localGenAI.getGenerativeModel({ model: "gemini-1.5-flash" });
             
             // Format messages for Gemini
             const geminiMessages = messages.map(m => ({
@@ -191,8 +198,10 @@ export async function generateAutoResponse(
         }
 
         async function tryGroq(model: string) {
+            if (!groqKey) throw new Error("Groq API key not configured");
             console.log(`Attempting Groq ${model} (Fallback)...`);
-            const completion = await groq.chat.completions.create({
+            const localGroq = new Groq({ apiKey: groqKey });
+            const completion = await localGroq.chat.completions.create({
                 model: model,
                 messages,
                 temperature: 0.7,
@@ -202,18 +211,18 @@ export async function generateAutoResponse(
         }
 
         try {
-            // Priority 1: Gemini (Highest Limit)
-            response = await tryGemini();
-            console.log(`Gemini success in ${Date.now() - attemptStartTime}ms`);
-        } catch (geminiError: any) {
-            console.warn("Gemini failed, trying Groq 70B...", geminiError.message);
+            // Priority 1: Groq 70B
+            response = await tryGroq("llama-3.3-70b-versatile");
+            console.log(`Groq 70B success in ${Date.now() - attemptStartTime}ms`);
+        } catch (groq70Error: any) {
+            console.warn("Groq 70B failed, trying Gemini...", groq70Error.message);
             try {
-                // Priority 2: Groq 70B
+                // Priority 2: Gemini
                 attemptStartTime = Date.now();
-                response = await tryGroq("llama-3.3-70b-versatile");
-                console.log(`Groq 70B success in ${Date.now() - attemptStartTime}ms`);
-            } catch (groq70Error: any) {
-                console.error("Groq 70B failed, trying Groq 8B...", groq70Error.message);
+                response = await tryGemini();
+                console.log(`Gemini success in ${Date.now() - attemptStartTime}ms`);
+            } catch (geminiError: any) {
+                console.error("Gemini also failed, trying Groq 8B...", geminiError.message);
                 try {
                     // Priority 3: Groq 8B
                     attemptStartTime = Date.now();
@@ -221,7 +230,7 @@ export async function generateAutoResponse(
                     console.log(`Groq 8B success in ${Date.now() - attemptStartTime}ms`);
                 } catch (groq8Error: any) {
                     console.error("All AI models failed!");
-                    return { success: false, error: "AI service unavailable (Gemini & Groq failed)" };
+                    return { success: false, error: "AI service unavailable (Groq & Gemini failed)" };
                 }
             }
         }
@@ -376,7 +385,7 @@ export async function generateReminderResponse(
         const [mappingResult, historyResult] = await Promise.all([
             supabase
                 .from("phone_document_mapping")
-                .select("system_prompt, auth_token, origin")
+                .select("system_prompt, auth_token, origin, gemini_api_key, groq_api_key, mistral_api_key")
                 .eq("phone_number", toNumber)
                 .single(),
             supabase
@@ -428,9 +437,15 @@ export async function generateReminderResponse(
         ];
 
         // 3. Generate with Fallback
+        // Use custom keys or default
+        const geminiKey = phoneMapping.gemini_api_key || process.env.GEMINI_API_KEY;
+        const groqKey = phoneMapping.groq_api_key || process.env.GROQ_API_KEY;
+
         let response = "";
         try {
-            const completion = await groq.chat.completions.create({
+            if (!groqKey) throw new Error("No Groq key");
+            const localGroq = new Groq({ apiKey: groqKey });
+            const completion = await localGroq.chat.completions.create({
                 model: "llama-3.3-70b-versatile",
                 messages,
                 temperature: 0.8,
@@ -439,8 +454,9 @@ export async function generateReminderResponse(
             response = completion.choices[0].message.content || "";
         } catch (e: any) {
             console.error("Groq reminder failed:", e.message);
-            if (genAI) {
-                const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+            if (geminiKey) {
+                const localGenAI = new GoogleGenerativeAI(geminiKey);
+                const model = localGenAI.getGenerativeModel({ model: "gemini-1.5-flash" });
                 const result = await model.generateContent({
                     contents: messages.map(m => ({
                         role: m.role === "system" ? "user" : (m.role === "user" ? "user" : "model"),

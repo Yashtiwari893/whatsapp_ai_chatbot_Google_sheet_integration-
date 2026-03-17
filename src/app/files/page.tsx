@@ -26,6 +26,9 @@ type PhoneNumberGroup = {
     files: FileItem[];
     auth_token: string;
     origin: string;
+    gemini_api_key: string | null;
+    groq_api_key: string | null;
+    mistral_api_key: string | null;
 };
 
 /* ================= COMPONENT ================= */
@@ -45,6 +48,9 @@ export default function FilesPage() {
     const [editAuthToken, setEditAuthToken] = useState("");
     const [editOrigin, setEditOrigin] = useState("");
     const [editSystemPrompt, setEditSystemPrompt] = useState("");
+    const [editGeminiKey, setEditGeminiKey] = useState("");
+    const [editGroqKey, setEditGroqKey] = useState("");
+    const [editMistralKey, setEditMistralKey] = useState("");
     const [isNewPhone, setIsNewPhone] = useState(false);
     const [savingSettings, setSavingSettings] = useState(false);
 
@@ -79,6 +85,9 @@ export default function FilesPage() {
                 setEditAuthToken(group.auth_token || "");
                 setEditOrigin(group.origin || "");
                 setEditSystemPrompt(group.system_prompt || "");
+                setEditGeminiKey(group.gemini_api_key || "");
+                setEditGroqKey(group.groq_api_key || "");
+                setEditMistralKey(group.mistral_api_key || "");
                 setIsNewPhone(false);
             }
         }
@@ -95,6 +104,9 @@ export default function FilesPage() {
         setEditAuthToken("");
         setEditOrigin("");
         setEditSystemPrompt("");
+        setEditGeminiKey("");
+        setEditGroqKey("");
+        setEditMistralKey("");
         setSelectedFile(null);
         setIsNewPhone(true);
         setDevInfo(null);
@@ -164,6 +176,9 @@ export default function FilesPage() {
         form.append("phone_number", editPhoneNumber.trim());
         form.append("auth_token", editAuthToken.trim());
         form.append("origin", editOrigin.trim());
+        form.append("gemini_api_key", editGeminiKey.trim());
+        form.append("groq_api_key", editGroqKey.trim());
+        form.append("mistral_api_key", editMistralKey.trim());
         form.append("dev_mode", devMode.toString());
         form.append("processing_mode", processingMode);
 
@@ -241,6 +256,9 @@ export default function FilesPage() {
                 setEditAuthToken("");
                 setEditOrigin("");
                 setEditSystemPrompt("");
+                setEditGeminiKey("");
+                setEditGroqKey("");
+                setEditMistralKey("");
                 await loadPhoneGroups();
             } else {
                 alert("Failed to delete phone number");
@@ -268,6 +286,9 @@ export default function FilesPage() {
                     system_prompt: editSystemPrompt.trim() || null,
                     auth_token: editAuthToken.trim() || null,
                     origin: editOrigin.trim() || null,
+                    gemini_api_key: editGeminiKey.trim() || null,
+                    groq_api_key: editGroqKey.trim() || null,
+                    mistral_api_key: editMistralKey.trim() || null,
                 }),
             });
 
@@ -457,6 +478,46 @@ export default function FilesPage() {
                                                     placeholder="https://example.com/"
                                                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                                                 />
+                                            </div>
+
+                                            {/* Custom API Keys */}
+                                            <div className="pt-4 border-t">
+                                                <h4 className="text-sm font-semibold mb-3">Custom AI API Keys (Optional)</h4>
+                                                <div className="space-y-4">
+                                                    <div>
+                                                        <label className="block text-sm font-medium mb-1">Gemini API Key</label>
+                                                        <input
+                                                            type="password"
+                                                            value={editGeminiKey}
+                                                            onChange={(e) => setEditGeminiKey(e.target.value)}
+                                                            placeholder="Leave empty to use default"
+                                                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-sm font-medium mb-1">Groq API Key</label>
+                                                        <input
+                                                            type="password"
+                                                            value={editGroqKey}
+                                                            onChange={(e) => setEditGroqKey(e.target.value)}
+                                                            placeholder="Leave empty to use default"
+                                                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-sm font-medium mb-1">Mistral API Key (for Embeddings)</label>
+                                                        <input
+                                                            type="password"
+                                                            value={editMistralKey}
+                                                            onChange={(e) => setEditMistralKey(e.target.value)}
+                                                            placeholder="Leave empty to use default"
+                                                            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                                                        />
+                                                    </div>
+                                                </div>
+                                                <p className="mt-2 text-xs text-gray-500">
+                                                    If provided, these keys will be used instead of the platform default.
+                                                </p>
                                             </div>
 
                                             {/* Save Settings Button */}
