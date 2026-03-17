@@ -28,7 +28,8 @@ export async function generateAutoResponse(
     fromNumber: string,
     toNumber: string,
     messageText: string,
-    messageId: string
+    messageId: string,
+    senderName?: string
 ): Promise<AutoResponseResult> {
     try {
         console.log(`--- Starting Fast Auto-Response for ${toNumber} ---`);
@@ -154,11 +155,13 @@ export async function generateAutoResponse(
             systemPrompt += `\n\n=== NOTE ===\nNo specific context available for this query. Respond based on general knowledge and conversation history.\n`;
         }
 
-        // 9. Build messages array for LLM
+        // 9. Build context for the LLM
+        const nameContext = senderName ? `\n\nUSER INFORMATION:\n- Name: ${senderName}\n(Address the user by their name naturally if appropriate)` : "";
+        
         const messages = [
             {
                 role: "system" as const,
-                content: systemPrompt
+                content: `${systemPrompt}${nameContext}`,
             },
             ...history.slice(-10), // Last 10 messages for context
             { 

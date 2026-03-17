@@ -28,10 +28,10 @@ IDENTITY & TONE
 
 LANGUAGE & STYLE
 - Reply in the EXACT same language the user writes in. Hindi → Hindi. English → English. Gujarati → Gujarati. Hinglish → Hinglish.
-- Keep every reply to 2–3 lines MAX. No walls of text.
-- Use emojis sparingly — max 1–2 per message, only when it feels natural.
-- Never use markdown formatting (no **bold**, no bullet points, no headers).
-- Ask at most ONE follow-up question per message.
+- Keep replies concise and readable for WhatsApp. Avoid wall of texts, but ensure all user questions are answered completely.
+- Use emojis naturally — max 2-3 per message.
+- Avoid markdown formatting where possible (no bold/headers), as some WhatsApp versions don't render it well.
+- Ask follow-up questions only when necessary to move the conversation forward.
 
 CONTEXT & MEMORY
 - Remember what service or product the user asked about earlier in the conversation and stay focused on it.
@@ -133,30 +133,48 @@ export async function POST(req: NextRequest) {
         const messages = buildMessages(intent, custom_prompt);
         let generatedPersona = "";
 
-        try {
-            console.log("Trying Groq...");
-            const completion = await groq.chat.completions.create({
+        // Fetch existing keys if any
+        const { data: currentMapping } = await supabase
+            .from("phone_document_mapping")
+            .select("gemini_api_key, groq_api_key")
+            .eq("phone_number", phone_number)
+            .single();
+
+        const groqKey = currentMapping?.groq_api_key || process.env.GROQ_API_KEY;
+        const geminiKey = currentMapping?.gemini_api_key || process.env.GEMINI_API_KEY;
+
+        async function tryGroq() {
+            if (!groqKey) throw new Error("Groq API key not configured");
+            const localGroq = new Groq({ apiKey: groqKey });
+            const completion = await localGroq.chat.completions.create({
                 messages,
                 model: "llama-3.3-70b-versatile",
                 temperature: 0.7,
                 max_tokens: 400,
             });
-            generatedPersona = completion.choices[0]?.message?.content || "";
-        } catch (groqError: any) {
-            console.error("Groq failed, trying Gemini:", groqError.message);
-            if (!genAI) throw new Error("Groq failed and Gemini is not configured");
+            return completion.choices[0]?.message?.content || "";
+        }
 
+        async function tryGemini() {
+            if (!geminiKey) throw new Error("Gemini API key not configured");
+            const localGenAI = new GoogleGenerativeAI(geminiKey);
+            const model = localGenAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+            const result = await model.generateContent({
+                contents: [{
+                    role: "user",
+                    parts: [{ text: messages[0].content + "\n\n" + messages[1].content }],
+                }],
+            });
+            return result.response.text();
+        }
+
+        try {
+            console.log("Trying Groq (Primary)...");
+            generatedPersona = await tryGroq();
+        } catch (groqError: any) {
+            console.error("Groq failed, trying Gemini (Fallback):", groqError.message);
             try {
-                const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-                const result = await model.generateContent({
-                    contents: [
-                        {
-                            role: "user",
-                            parts: [{ text: messages[0].content + "\n\n" + messages[1].content }],
-                        },
-                    ],
-                });
-                generatedPersona = result.response.text();
+                generatedPersona = await tryGemini();
                 console.log("Gemini fallback success");
             } catch (geminiError: any) {
                 console.error("Gemini failed:", geminiError.message);

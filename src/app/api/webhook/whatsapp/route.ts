@@ -228,7 +228,8 @@ export async function POST(req: Request) {
                     payload.from,
                     payload.to,
                     messageText,
-                    payload.messageId
+                    payload.messageId,
+                    payload.whatsapp?.senderName
                 );
 
                 if (result.success) {
